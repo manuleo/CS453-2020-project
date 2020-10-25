@@ -7,42 +7,42 @@
 
 /** Lock default constructor.
 **/
-Lock::Lock() {
-    return;
-}
+// Lock::Lock() {
+//     return;
+// }
 
-/** Lock destructor.
-**/
-Lock::~Lock() {
-    return;
-}
+// /** Lock destructor.
+// **/
+// Lock::~Lock() {
+//     return;
+// }
 
-bool Lock::init() {
-    atomic_init(&locked, false);
-    return true;
-}
+// bool Lock::init() {
+//     atomic_init(&locked, false);
+//     return true;
+// }
 
-/** [thread-safe] Acquire the lock, block if it is already acquired.
-**/
-bool Lock::lock() {
-    bool expected = false;
-    while (unlikely(!atomic_compare_exchange_weak_explicit(&locked, &expected, true, memory_order_acquire, memory_order_relaxed))) {
-        expected = false;
-        while (unlikely(atomic_load_explicit(&locked, memory_order_relaxed)))
-            pause();
-    }
-    return true;
-}
+// /** [thread-safe] Acquire the lock, block if it is already acquired.
+// **/
+// bool Lock::lock() {
+//     bool expected = false;
+//     while (unlikely(!atomic_compare_exchange_weak_explicit(&locked, &expected, true, memory_order_acquire, memory_order_relaxed))) {
+//         expected = false;
+//         while (unlikely(atomic_load_explicit(&locked, memory_order_relaxed)))
+//             pause();
+//     }
+//     return true;
+// }
 
-/** [thread-safe] Release the lock, assuming it is indeed held by the caller.
-**/
-void Lock::unlock() {
-    atomic_store_explicit(&locked, false, memory_order_release);
-    return;
-}
+// /** [thread-safe] Release the lock, assuming it is indeed held by the caller.
+// **/
+// void Lock::unlock() {
+//     atomic_store_explicit(&locked, false, memory_order_release);
+//     return;
+// }
 
-MemoryObject::MemoryObject(bool is_valid) {
-    this->is_valid = is_valid;
+MemoryObject::MemoryObject() {
+    this->id_deleted = -1;
     return;
 }
 
@@ -78,10 +78,11 @@ VersionTuple::~VersionTuple() {
     return;
 }
 
-Write::Write(MemoryObject* object, size_t size, WriteType type) {
+Write::Write(shared_ptr<MemoryObject> object, size_t size, WriteType type) {
     this->object = object;
     this->size = size;
     this->type = type;
+    this->read = false;
 }
 
 Write::~Write() {

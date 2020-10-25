@@ -2,6 +2,8 @@
 
 // External headers
 #include <atomic>
+#include <mutex>
+#include <memory>
 #include <list>
 #include <stdlib.h>
 #include <string.h>
@@ -75,25 +77,25 @@ static inline void pause() {
 using namespace std;
 using std::vector;
 
-/** Your lock class.
-**/
-class Lock final {
-public:
-    /** Deleted copy/move constructor/assignment.
-    **/
-    Lock(Lock const&);
-    Lock& operator=(Lock const&);
-    // NOTE: Actually, one could argue it makes sense to implement move,
-    //       but we don't care about this feature in our simple playground
-public:
-    atomic_bool locked;
-    Lock();
-    ~Lock();
-public:
-    bool init();
-    bool lock();
-    void unlock();
-};
+// /** Your lock class.
+// **/
+// class Lock final {
+// public:
+//     /** Deleted copy/move constructor/assignment.
+//     **/
+//     Lock(Lock const&) = delete;
+//     Lock& operator=(Lock const&) = delete;
+//     // NOTE: Actually, one could argue it makes sense to implement move,
+//     //       but we don't care about this feature in our simple playground
+// public:
+//     atomic_bool locked;
+//     Lock();
+//     ~Lock();
+// public:
+//     bool init();
+//     bool lock();
+//     void unlock();
+// };
 
 class VersionTuple {
 public:
@@ -101,16 +103,25 @@ public:
     void* data;
     vector<int> readList;
     VersionTuple(int ts, void* data);
-    ~VersionTuple();    
+    ~VersionTuple();
+    // VersionTuple copyable/movable for now
+    // VersionTuple(const VersionTuple&) = delete;
+    // VersionTuple& operator=(const VersionTuple&) = delete; 
+    // VersionTuple(VersionTuple&&) = delete;
+    // VersionTuple& operator=(VersionTuple&&) = delete;
 };
 
 class MemoryObject {
 public:
-    Lock lock;
+    recursive_mutex lock;
     vector<VersionTuple*> versions;
-    bool is_valid;
-    MemoryObject(bool is_valid);
-    ~MemoryObject();    
+    int id_deleted;
+    MemoryObject();
+    ~MemoryObject();  
+    MemoryObject(const MemoryObject&) = delete;
+    MemoryObject& operator=(const MemoryObject&) = delete; 
+    MemoryObject(MemoryObject&&) = delete;
+    MemoryObject& operator=(MemoryObject&&) = delete;  
 };
 
 enum class WriteType: int {
@@ -121,30 +132,40 @@ enum class WriteType: int {
 
 class Write {
 public:
-    MemoryObject* object;
+    shared_ptr<MemoryObject> object;
     void* data;
     size_t size;
     WriteType type;
-    Write(MemoryObject* object, size_t size, WriteType type);
+    bool read;
+    Write(shared_ptr<MemoryObject> object, size_t size, WriteType type);
     ~Write(); 
+    Write(const Write&) = delete;
+    Write& operator=(const Write&) = delete; 
+    Write(Write&&) = delete;
+    Write& operator=(Write&&) = delete;  
 };
 
 class TransactionObject {
 public:
     int t_id;
     bool is_ro;
-    vector<Write*> writes;
+    vector<shared_ptr<Write>> writes;
+    vector<shared_ptr<MemoryObject>> reads;
     TransactionObject(int t_id, bool is_ro);
     ~TransactionObject(); 
+    TransactionObject(const TransactionObject&) = delete;
+    TransactionObject& operator=(const TransactionObject&) = delete; 
+    TransactionObject(TransactionObject&&) = delete;
+    TransactionObject& operator=(TransactionObject&&) = delete;  
 };
 
 class Region {
 public:
     int t_count;
-    Lock lock_trans;
-    Lock lock_mem;
-    vector<MemoryObject*> memory;
-    vector<TransactionObject*> trans;
+    recursive_mutex lock_trans;
+    recursive_mutex lock_mem;
+    vector<shared_ptr<MemoryObject>> memory;
+    vector<shared_ptr<TransactionObject>> trans;
     size_t size;
     size_t align;
     Region(size_t size, size_t align);
