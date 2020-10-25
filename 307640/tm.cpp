@@ -82,6 +82,8 @@ void tm_destroy(shared_t shared) noexcept {
 **/
 void* tm_start(shared_t shared) noexcept {
     return ((Region*)shared)->memory.front().get();
+    //return ((Region*)shared)->memory.front()->versions[0]->data;
+    //TODO: understand what I should return to the user. Do I need to return directly the region where to write? If yes need to rethink
 }
 
 /** [thread-safe] Return the size (in bytes) of the first allocated segment of the shared memory region.
@@ -200,7 +202,7 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
             if(!inserted)
                 write->object->versions.push_back(new_version);
         }
-        else if (write->type == WriteType::write) {
+        else if (write->type == WriteType::alloc) {
             VersionTuple* new_version = new VersionTuple(tran->t_id, NULL);
             if (unlikely(posix_memalign(&(new_version->data), reg->align, write->size) != 0)) {
                 free(new_version);
