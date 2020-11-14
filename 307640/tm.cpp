@@ -21,16 +21,17 @@
 
 void removeT(shared_ptr<TransactionObject> tran) {
     for (auto& write : tran->writes) {
-        if (write.second.data != nullptr)
-            free(write.second.data);
-        if (write.second.type == WriteType::alloc) {
-            shared_ptr<MemorySegment> seg = write.second.segment;
+        if (write.second->data != nullptr)
+            free(write.second->data);
+        if (write.second->type == WriteType::alloc) {
+            shared_ptr<MemorySegment> seg = write.second->segment;
             free(seg->data);
             seg->writelocks.clear();
         }
-        if (write.second.type == WriteType::free) {
-            write.second.lock_frees.clear();
+        if (write.second->type == WriteType::free) {
+            write.second->lock_frees.clear();
         }
+        delete write.second;
     }
     tran->writes.clear();
     tran->order_writes.clear();
@@ -40,7 +41,7 @@ void removeT(shared_ptr<TransactionObject> tran) {
     return;
 }
 
-void freeLocks(map<void*,list<unique_lock<recursive_mutex>*>>* acq_locks) {
+void freeLocks(map<void*,list<unique_lock<recursive_timed_mutex>*>>* acq_locks) {
     for (auto const& pair : *acq_locks) {
         for (auto const& lock: pair.second) {
             lock->unlock();
@@ -186,17 +187,17 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
             return false;
     }
     chrono::milliseconds try_dur(100);
-    map<void*, list<unique_lock<recursive_mutex>*>> acq_locks;
+    map<void*, list<unique_lock<recursive_timed_mutex>*>> acq_locks;
     for (auto &write : tran->writes) {
-        if (write.second.type == WriteType::write || write.second.type == WriteType::dummy) {
-            acq_locks[write.first].push_back(new unique_lock<recursive_mutex>(write.second.lock->lock, defer_lock));
+        if (write.second->type == WriteType::write || write.second->type == WriteType::dummy) {
+            acq_locks[write.first].push_back(new unique_lock<recursive_timed_mutex>(write.second->lock->lock, defer_lock));
             if (!(acq_locks[write.first].back()->try_lock_for(try_dur))) {
                 removeT(tran);
                 freeLocks(&acq_locks);
                 return false;
             }
-            if (write.second.will_be_freed) 
-                acq_locks[write.first].push_back(new unique_lock<recursive_mutex>(write.second.lock->lock));
+            if (write.second->will_be_freed) 
+                acq_locks[write.first].push_back(new unique_lock<recursive_timed_mutex>(write.second->lock->lock));
         }
     }
     tran->wv = ++reg->clock;
@@ -208,12 +209,12 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
     }
     // Validating write and frees w.r.t other possible free before proceeding
     for (auto &write : tran->writes) {
-        if (write.second.type == WriteType::write || write.second.type == WriteType::free) {
-            if (write.second.segment->is_freed) {
-                if (write.second.segment.unique())
-                    cleanSeg(write.second.segment);
+        if (write.second->type == WriteType::write || write.second->type == WriteType::free) {
+            if (write.second->segment->is_freed) {
+                if (write.second->segment.unique())
+                    cleanSeg(write.second->segment);
                 else
-                    write.second.segment.reset();
+                    write.second->segment.reset();
             }
             removeT(tran);
             freeLocks(&acq_locks);
@@ -221,56 +222,56 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
         }
     }
     // Now we are sure we can commit
-    for (auto const& addr: tran->order_writes) {
-        Write w = tran->writes[addr];
-        if (w.type == WriteType::write) {
-            memcpy(addr, w.data, reg->align);
-            w.lock->version.store(tran->wv);
+    for (void* addr: tran->order_writes) {
+        Write* w = tran->writes[addr];
+        if (w->type == WriteType::write) {
+            memcpy(addr, w->data, reg->align);
+            w->lock->version.store(tran->wv);
             acq_locks[addr].front()->unlock();
             delete acq_locks[addr].front();
             acq_locks[addr].pop_front();
             if (acq_locks[addr].size() == 0)
                 acq_locks.erase(addr);
         }
-        else if (w.type == WriteType::alloc) {
-            void* start_segment = w.segment->data;
+        else if (w->type == WriteType::alloc) {
+            void* start_segment = w->segment->data;
             reg->lock_mem.lock();
             uint idx = ++reg->mem_counter;
-            reg->memory[idx] = w.segment;
-            for (size_t i = 0; i < w.segment->size; i+=reg->align) {
+            reg->memory[idx] = w->segment;
+            for (size_t i = 0; i < w->segment->size; i+=reg->align) {
                 reg->memory_map[start_segment+i] = idx;
             }
             reg->lock_mem.unlock();
         }
-        else if (w.type == WriteType::dummy) {
-            w.lock->version.store(tran->wv);
+        else if (w->type == WriteType::dummy) {
+            w->lock->version.store(tran->wv);
             acq_locks[addr].front()->unlock();
             delete acq_locks[addr].front();
             acq_locks[addr].pop_front();
             if (acq_locks[addr].size() == 0)
                 acq_locks.erase(addr);
         }
-        else if (w.type == WriteType::free) {
-            void* start_segment = w.segment->data;
-            if (w.allocated) {
+        else if (w->type == WriteType::free) {
+            void* start_segment = w->segment->data;
+            if (w->allocated) {
                 // Segment was allocated (either by the transaction itself or by someone else before)
                 reg->lock_mem.lock();
                 uint idx = reg->memory_map.at(start_segment);
                 reg->memory.erase(idx);
-                for (size_t i = 0; i < w.segment->size; i+=reg->align) {
+                for (size_t i = 0; i < w->segment->size; i+=reg->align) {
                     reg->memory_map.erase(start_segment+i);
                 }
                 reg->lock_mem.unlock();
-                w.segment->is_freed.store(true);
-                for (auto& free_lock: w.lock_frees) {
+                w->segment->is_freed.store(true);
+                for (auto& free_lock: w->lock_frees) {
                     free_lock->version.store(tran->wv);
                     free_lock->is_freed.store(true);
                 }
-                if (w.segment.unique())
-                    cleanSeg(w.segment);
+                if (w->segment.unique())
+                    cleanSeg(w->segment);
                 else
-                    w.segment.reset();
-                for (size_t i = 0; i < w.segment->size; i+=reg->align) {
+                    w->segment.reset();
+                for (size_t i = 0; i < w->segment->size; i+=reg->align) {
                     acq_locks[start_segment + i].front()->unlock();
                     delete acq_locks[start_segment + i].front();
                     acq_locks[start_segment + i].pop_front();
@@ -282,12 +283,12 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
                 // Segment wasn't allocated, we're first allocating then we'll free it (next time we encounter to do the free)
                 reg->lock_mem.lock();
                 uint idx = ++reg->mem_counter;
-                reg->memory[idx] = w.segment;
-                for (size_t i = 0; i < w.segment->size; i+=reg->align) {
+                reg->memory[idx] = w->segment;
+                for (size_t i = 0; i < w->segment->size; i+=reg->align) {
                     reg->memory_map[start_segment+i] = idx;
                 }
                 reg->lock_mem.unlock();
-                w.allocated = true;
+                w->allocated = true;
             }
         }
     }
@@ -311,12 +312,12 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
         void* word = const_cast<void*>(source) + i;
         if (!tran->is_ro) {
             if (tran->writes.count(word) == 1) {
-                shared_ptr<WordLock> word_lock = tran->writes[word].lock;
-                shared_ptr<MemorySegment> word_seg = tran->writes[word].segment;
+                shared_ptr<WordLock> word_lock = tran->writes[word]->lock;
+                shared_ptr<MemorySegment> word_seg = tran->writes[word]->segment;
                 pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>> seg_word_pair = make_pair(word_lock, word_seg);
-                if (none_of(tran->reads.begin(), tran->reads.end(), seg_word_pair))
+                if (none_of(tran->reads.begin(), tran->reads.end(), [&seg_word_pair](pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>> const& elem) { return seg_word_pair == elem; }))
                     tran->reads.push_back(seg_word_pair);
-                memcpy(target+i, tran->writes[word].data, reg->align);
+                memcpy(target+i, tran->writes[word]->data, reg->align);
             }
         }
         else {
@@ -351,7 +352,7 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
                 return false;
             }
             pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>> seg_word_pair = make_pair(word_lock, seg);
-            if (none_of(tran->reads.begin(), tran->reads.end(), seg_word_pair))
+            if (none_of(tran->reads.begin(), tran->reads.end(), [&seg_word_pair](pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>> const& elem) { return seg_word_pair == elem; }))
                 tran->reads.push_back(seg_word_pair);
         }
     }
@@ -373,9 +374,9 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
     for (size_t i = 0; i < size; i+=reg->align) {
         void* word = target + i;
         if (tran->writes.count(word) == 1) {
-            memcpy(tran->writes[word].data, source + i, reg->align);
-            if (tran->writes[word].type==WriteType::dummy)
-                tran->writes[word].type = WriteType::write;
+            memcpy(tran->writes[word]->data, source + i, reg->align);
+            if (tran->writes[word]->type==WriteType::dummy)
+                tran->writes[word]->type = WriteType::write;
         }
         else {
             if (seg == nullptr) {
@@ -393,11 +394,11 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
             seg->lock_pointers.lock();
             shared_ptr<WordLock> word_lock = seg->writelocks.at(word);
             seg->lock_pointers.unlock();
-            tran->writes[word] = Write(word_lock, seg, WriteType::write);
-            tran->writes[word].data = malloc(reg->align);
-            memcpy(tran->writes[word].data, source + i, reg->align);
+            tran->writes[word] = new Write(word_lock, seg, WriteType::write);
+            tran->writes[word]->data = malloc(reg->align);
+            memcpy(tran->writes[word]->data, source + i, reg->align);
         }
-        if (none_of(tran->order_writes.begin(), tran->order_writes.end(), word))
+        if (none_of(tran->order_writes.begin(), tran->order_writes.end(), [&word](void* const& elem) { return word == elem; }))
             tran->order_writes.push_back(word);
     }
     // TODO: should we do the same checks as read here too?
@@ -422,13 +423,13 @@ Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
         return Alloc::nomem;
     }
     memset(new_seg->data, 0, size);
-    tran->writes[new_seg.get()] = Write(nullptr, new_seg, WriteType::alloc);
+    tran->writes[new_seg.get()] = new Write(nullptr, new_seg, WriteType::alloc);
     tran->order_writes.push_back(new_seg.get());
     void* start_segment = new_seg->data;
     tran->allocated[start_segment] = new_seg;
     for (size_t i = 0; i < size; i+=reg->align) {
         new_seg->writelocks[start_segment+i] = make_shared<WordLock>();
-        tran->writes[start_segment+i] = Write(new_seg->writelocks[start_segment+i], nullptr, WriteType::dummy);
+        tran->writes[start_segment+i] = new Write(new_seg->writelocks[start_segment+i], nullptr, WriteType::dummy);
         tran->order_writes.push_back(start_segment+i);
     }
     *target = new_seg->data;
@@ -447,20 +448,20 @@ bool tm_free(shared_t shared, tx_t tx, void* target) noexcept {
     shared_ptr<TransactionObject> tran = reg->trans.at(tx);
     if (tran->allocated.count(target) == 1) {
         seg = tran->allocated[target];
-        tran->writes[seg.get()].type = WriteType::free;
+        tran->writes[seg.get()]->type = WriteType::free;
     }
     else {
         reg->lock_mem.lock();
         seg = reg->memory.at(reg->memory_map.at(target));
         reg->lock_mem.unlock();
-        tran->writes[seg.get()] = Write(nullptr, seg, WriteType::free);
+        tran->writes[seg.get()] = new Write(nullptr, seg, WriteType::free);
         seg->lock_pointers.lock();
         for (pair<void*, shared_ptr<WordLock>> wordlock: seg->writelocks) {
             if (tran->writes.count(wordlock.first)!=1) {
-                tran->writes[wordlock.first] = Write(wordlock.second, nullptr, WriteType::dummy);
+                tran->writes[wordlock.first] = new Write(wordlock.second, nullptr, WriteType::dummy);
             }
-            tran->writes[wordlock.first].will_be_freed = true;
-            tran->writes[seg.get()].lock_frees.push_back(wordlock.second);
+            tran->writes[wordlock.first]->will_be_freed = true;
+            tran->writes[seg.get()]->lock_frees.push_back(wordlock.second);
         }
         seg->lock_pointers.unlock();
     }

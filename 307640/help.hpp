@@ -83,53 +83,34 @@ using std::atomic;
 using std::list;
 using std::set;
 
-// /** Your lock class.
-// **/
-// class Lock final {
-// public:
-//     /** Deleted copy/move constructor/assignment.
-//     **/
-//     Lock(Lock const&) = delete;
-//     Lock& operator=(Lock const&) = delete;
-//     // NOTE: Actually, one could argue it makes sense to implement move,
-//     //       but we don't care about this feature in our simple playground
-// public:
-//     atomic_bool locked;
-//     Lock();
-//     ~Lock();
-// public:
-//     bool init();
-//     bool lock();
-//     void unlock();
-// };
+class WordLock {
+public:
+    recursive_timed_mutex lock;
+    atomic_uint version;
+    atomic_bool is_freed;
+    WordLock();
+    ~WordLock();
+    WordLock(const WordLock&) = delete;
+    WordLock& operator=(const WordLock&) = delete; 
+    WordLock(WordLock&&) = delete;
+    WordLock& operator=(WordLock&&) = delete;
+};
 
-// class VersionTuple {
-// public:
-//     int ts;
-//     void* data;
-//     vector<int> readList;
-//     VersionTuple(int ts, void* data);
-//     ~VersionTuple();
-//     // VersionTuple copyable/movable for now
-//     // VersionTuple(const VersionTuple&) = delete;
-//     // VersionTuple& operator=(const VersionTuple&) = delete; 
-//     // VersionTuple(VersionTuple&&) = delete;
-//     // VersionTuple& operator=(VersionTuple&&) = delete;
-// };
 
-// class MemoryObject {
-// public:
-//     recursive_mutex lock;
-//     vector<VersionTuple*> versions;
-//     int id_deleted;
-//     MemoryObject();
-//     ~MemoryObject();  
-//     MemoryObject(const MemoryObject&) = delete;
-//     MemoryObject& operator=(const MemoryObject&) = delete; 
-//     MemoryObject(MemoryObject&&) = delete;
-//     MemoryObject& operator=(MemoryObject&&) = delete;  
-// };
-
+class MemorySegment {
+public:
+    void* data;
+    size_t size;
+    mutex lock_pointers;
+    atomic_bool is_freed;
+    map<void*, shared_ptr<WordLock>> writelocks;
+    MemorySegment(size_t size);
+    ~MemorySegment();
+    // MemorySegment(const MemorySegment&) = delete;
+    // MemorySegment& operator=(const MemorySegment&) = delete; 
+    // MemorySegment(MemorySegment&&) = delete;
+    // MemorySegment& operator=(MemorySegment&&) = delete;
+};
 
 enum class WriteType: int {
     write = 0, 
@@ -161,7 +142,7 @@ public:
     bool is_ro;
     uint rv;
     uint wv;
-    map<void*, Write> writes;
+    map<void*, Write*> writes;
     list<void*> order_writes;
     vector<pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>>> reads;
     map<void*, shared_ptr<MemorySegment>> allocated;
@@ -170,33 +151,6 @@ public:
     ~TransactionObject();
 };
 
-class WordLock {
-public:
-    recursive_mutex lock;
-    atomic_uint version;
-    atomic_bool is_freed;
-    WordLock();
-    ~WordLock();
-    WordLock(const WordLock&) = delete;
-    WordLock& operator=(const WordLock&) = delete; 
-    WordLock(WordLock&&) = delete;
-    WordLock& operator=(WordLock&&) = delete;
-};
-
-class MemorySegment {
-public:
-    void* data;
-    size_t size;
-    mutex lock_pointers;
-    atomic_bool is_freed;
-    map<void*, shared_ptr<WordLock>> writelocks;
-    MemorySegment(size_t size);
-    ~MemorySegment();
-    // MemorySegment(const MemorySegment&) = delete;
-    // MemorySegment& operator=(const MemorySegment&) = delete; 
-    // MemorySegment(MemorySegment&&) = delete;
-    // MemorySegment& operator=(MemorySegment&&) = delete;
-};
 
 class Region {
 public:
