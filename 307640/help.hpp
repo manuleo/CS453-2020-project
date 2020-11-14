@@ -145,8 +145,10 @@ public:
     shared_ptr<MemorySegment> segment;
     WriteType type;
     bool allocated;
+    list<shared_ptr<WordLock>> lock_frees;
+    bool will_be_freed;
     Write(shared_ptr<WordLock> lock, shared_ptr<MemorySegment> segment, WriteType type);
-    ~Write(); 
+    ~Write();
     // Write(const Write&) = delete;
     // Write& operator=(const Write&) = delete; 
     // Write(Write&&) = delete;
@@ -161,16 +163,18 @@ public:
     uint wv;
     map<void*, Write> writes;
     list<void*> order_writes;
-    set<shared_ptr<WordLock>> reads;
+    vector<pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>>> reads;
     map<void*, shared_ptr<MemorySegment>> allocated;
+    bool removed;
     TransactionObject(uint t_id, bool is_ro, uint rv);
     ~TransactionObject();
 };
 
 class WordLock {
 public:
-    mutex lock;
+    recursive_mutex lock;
     atomic_uint version;
+    atomic_bool is_freed;
     WordLock();
     ~WordLock();
     WordLock(const WordLock&) = delete;

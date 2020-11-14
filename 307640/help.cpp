@@ -3,6 +3,7 @@
 
 MemorySegment::MemorySegment(size_t size) {
     this->size = size;
+    this->is_freed.store(false);
     return;
 }
 
@@ -36,6 +37,7 @@ TransactionObject::TransactionObject(uint t_id, bool is_ro, uint rv) {
     this->t_id = t_id;
     this->is_ro = is_ro;
     this->rv = rv;
+    this->removed = false;
 }
 
 TransactionObject::~TransactionObject() {
@@ -50,6 +52,7 @@ Write::Write(shared_ptr<WordLock> lock, shared_ptr<MemorySegment> segment, Write
         this->allocated = false;
     else
         this->allocated = true;
+    this->will_be_freed = false;
     this->data = nullptr;
 }
 
