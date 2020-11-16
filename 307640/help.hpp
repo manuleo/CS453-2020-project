@@ -160,6 +160,7 @@ public:
     map<void*, uint> memory_map;
     mutex lock_mem;
     atomic_uint tran_counter;
+    mutex lock_trans;
     map<uint, shared_ptr<TransactionObject>> trans;
     size_t size;
     size_t align;
