@@ -65,7 +65,7 @@ bool validateReads(shared_ptr<TransactionObject> tran) {
     // Should we lock read locations too?
     for (auto &read : tran->reads) {
         if (read.first->version > tran->rv) {
-            if (read.first->is_freed) {
+            if (read.first->is_freed.load()) {
                 if (read.second.unique())
                     cleanSeg(read.second);
                 else
@@ -118,7 +118,7 @@ shared_t tm_create(size_t size, size_t align) noexcept {
 void tm_destroy(shared_t shared) noexcept {
     Region* reg = (Region*) shared;
     for (auto &pair_seg: reg->memory) {
-        if (!pair_seg.second->is_freed) {
+        if (!pair_seg.second->is_freed.load()) {
             cleanSeg(pair_seg.second);
         }
     }
@@ -185,6 +185,8 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
     if (tran->is_ro) {
         if (!validateReads(tran)) 
             return false;
+        removeT(tran);
+        return true;
     }
     chrono::milliseconds try_dur(100);
     map<void*, list<unique_lock<recursive_timed_mutex>*>> acq_locks;
@@ -210,15 +212,15 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
     // Validating write and frees w.r.t other possible free before proceeding
     for (auto &write : tran->writes) {
         if (write.second->type == WriteType::write || write.second->type == WriteType::free) {
-            if (write.second->segment->is_freed) {
+            if (write.second->segment->is_freed.load()) {
                 if (write.second->segment.unique())
                     cleanSeg(write.second->segment);
                 else
                     write.second->segment.reset();
+                removeT(tran);
+                freeLocks(&acq_locks);
+                return false;
             }
-            removeT(tran);
-            freeLocks(&acq_locks);
-            return false;
         }
     }
     // Now we are sure we can commit
@@ -310,6 +312,7 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
     shared_ptr<MemorySegment> seg = nullptr;
     for (size_t i = 0; i < size; i+=reg->align) {
         void* word = const_cast<void*>(source) + i;
+        bool taken_from_write = false;
         if (!tran->is_ro) {
             if (tran->writes.count(word) == 1) {
                 shared_ptr<WordLock> word_lock = tran->writes[word]->lock;
@@ -318,9 +321,10 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
                 if (none_of(tran->reads.begin(), tran->reads.end(), [&seg_word_pair](pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>> const& elem) { return seg_word_pair == elem; }))
                     tran->reads.push_back(seg_word_pair);
                 memcpy(target+i, tran->writes[word]->data, reg->align);
+                taken_from_write = true;
             }
         }
-        else {
+        if (!taken_from_write){
             if (seg == nullptr) {
                 reg->lock_mem.lock();
                 if (reg->memory_map.count(word) == 1) {
@@ -341,7 +345,7 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
             // should we check if we can have the lock too?
             // TODO: understand what bad can happen here with a freed segment: 
             // we can avoid to free the segment and wait until we have only one reference left?
-            memcpy(target+i, seg->data+i, reg->align);
+            memcpy(target+i, word, reg->align);
             uint new_ver = word_lock->version.load();
             if (new_ver != write_ver) {
                 removeT(tran);
