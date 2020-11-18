@@ -148,7 +148,7 @@ public:
     uint rv;
     uint wv;
     unordered_map<void*, Write*> writes;
-    list<void*> order_writes;
+    vector<void*> order_writes;
     unordered_set<pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>>, hash_pair> reads;
     unordered_map<void*, shared_ptr<MemorySegment>> allocated;
     bool removed;
