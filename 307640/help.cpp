@@ -16,7 +16,6 @@ Region::Region(size_t size, size_t align) {
     this->align = align;
     this->clock.store(0);
     this->tran_counter.store(0);
-    this->mem_counter.store(0);
 }
 
 Region::~Region() {

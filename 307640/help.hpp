@@ -3,16 +3,18 @@
 // External headers
 #include <atomic>
 #include <mutex>
-#include <memory>
+#include <shared_mutex>
 #include <list>
 #include <stdlib.h>
 #include <string.h>
-#include <algorithm>
 #include <iostream>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <utility>
 #include <set>
+#include <unordered_set>
+#include <functional>
 
 // Requested features
 #ifndef _GNU_SOURCE
@@ -82,6 +84,9 @@ using std::vector;
 using std::atomic;
 using std::list;
 using std::set;
+using std::unordered_map;
+using std::unordered_set;
+using std::shared_mutex;
 
 class WordLock {
 public:
@@ -101,15 +106,11 @@ class MemorySegment {
 public:
     void* data;
     size_t size;
-    mutex lock_pointers;
+    shared_mutex lock_pointers;
     atomic_bool is_freed;
-    map<void*, shared_ptr<WordLock>> writelocks;
+    unordered_map<void*, shared_ptr<WordLock>> writelocks;
     MemorySegment(size_t size);
     ~MemorySegment();
-    // MemorySegment(const MemorySegment&) = delete;
-    // MemorySegment& operator=(const MemorySegment&) = delete; 
-    // MemorySegment(MemorySegment&&) = delete;
-    // MemorySegment& operator=(MemorySegment&&) = delete;
 };
 
 enum class WriteType: int {
@@ -130,10 +131,14 @@ public:
     bool will_be_freed;
     Write(shared_ptr<WordLock> lock, shared_ptr<MemorySegment> segment, WriteType type);
     ~Write();
-    // Write(const Write&) = delete;
-    // Write& operator=(const Write&) = delete; 
-    // Write(Write&&) = delete;
-    // Write& operator=(Write&&) = delete;  
+};
+
+
+struct hash_pair {
+    size_t operator()(const pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>> &pair ) const
+    {
+        return hash<shared_ptr<WordLock>>()(pair.first) ^ hash<shared_ptr<MemorySegment>>()(pair.second);
+    }
 };
 
 class TransactionObject {
@@ -142,10 +147,10 @@ public:
     bool is_ro;
     uint rv;
     uint wv;
-    map<void*, Write*> writes;
+    unordered_map<void*, Write*> writes;
     list<void*> order_writes;
-    vector<pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>>> reads;
-    map<void*, shared_ptr<MemorySegment>> allocated;
+    unordered_set<pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>>, hash_pair> reads;
+    unordered_map<void*, shared_ptr<MemorySegment>> allocated;
     bool removed;
     TransactionObject(uint t_id, bool is_ro, uint rv);
     ~TransactionObject();
@@ -155,13 +160,12 @@ public:
 class Region {
 public:
     atomic_uint clock;
-    atomic_uint mem_counter;
-    map<uint, shared_ptr<MemorySegment>> memory;
-    map<void*, uint> memory_map;
-    mutex lock_mem;
+    unordered_map<void*, shared_ptr<MemorySegment>> memory;
+    void* first_word;
+    shared_mutex lock_mem;
     atomic_uint tran_counter;
-    mutex lock_trans;
-    map<uint, shared_ptr<TransactionObject>> trans;
+    shared_mutex lock_trans;
+    unordered_map<uint, shared_ptr<TransactionObject>> trans;
     size_t size;
     size_t align;
     Region(size_t size, size_t align);
