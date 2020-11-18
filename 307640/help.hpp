@@ -164,8 +164,8 @@ public:
     void* first_word;
     shared_mutex lock_mem;
     atomic_uint tran_counter;
-    shared_mutex lock_trans;
-    unordered_map<uint, shared_ptr<TransactionObject>> trans;
+    // shared_mutex lock_trans;
+    // unordered_map<uint, shared_ptr<TransactionObject>> trans;
     size_t size;
     size_t align;
     Region(size_t size, size_t align);

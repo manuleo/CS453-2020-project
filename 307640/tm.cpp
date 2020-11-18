@@ -19,7 +19,7 @@
 // -------------------------------------------------------------------------- //
 // Helper functions
 
-void removeT(shared_ptr<TransactionObject> tran, bool failed) {
+void removeT(TransactionObject* tran, bool failed) {
     for (auto& write : tran->writes) {
         if (write.second->data != nullptr)
             free(write.second->data);
@@ -40,6 +40,7 @@ void removeT(shared_ptr<TransactionObject> tran, bool failed) {
     tran->reads.clear();
     tran->allocated.clear();
     tran->removed = true;
+    delete tran;
     return;
 }
 
@@ -108,12 +109,12 @@ void tm_destroy(shared_t shared) noexcept {
         }
     }
     reg->memory.clear();
-    for (auto &pair_tran: reg->trans) {
-        if (!pair_tran.second->removed) {
-            removeT(pair_tran.second, false);
-        }
-    }
-    reg->trans.clear();
+    // for (auto &pair_tran: reg->trans) {
+    //     if (!pair_tran.second->removed) {
+    //         removeT(pair_tran.second, false);
+    //     }
+    // }
+    // reg->trans.clear();
     delete reg;
     return;
 }
@@ -151,18 +152,19 @@ tx_t tm_begin(shared_t shared, bool is_ro) noexcept {
     // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
     uint t_id = ++reg->tran_counter;
-    shared_ptr<TransactionObject> tran = make_shared<TransactionObject>(t_id, is_ro, reg->clock.load());
+    //shared_ptr<TransactionObject> tran = make_shared<TransactionObject>(t_id, is_ro, reg->clock.load());
+    TransactionObject* tran = new TransactionObject(t_id, is_ro, reg->clock.load());
     if (unlikely(!tran)) {
         return invalid_tx;
     }
-    reg->lock_trans.lock();
-    reg->trans[t_id] = tran;
-    reg->lock_trans.unlock();
+    // reg->lock_trans.lock();
+    // reg->trans[t_id] = tran;
+    // reg->lock_trans.unlock();
     // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
     // if (dur > 100000)
     //     std::cout << "tm_begin time difference = " << dur << "[ns]" << std::endl;
-    return tran->t_id;
+    return reinterpret_cast<tx_t>(tran);
 }
 
 /** [thread-safe] End the given transaction.
@@ -173,9 +175,10 @@ tx_t tm_begin(shared_t shared, bool is_ro) noexcept {
 bool tm_end(shared_t shared, tx_t tx) noexcept {
     // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
-    reg->lock_trans.lock_shared();
-    shared_ptr<TransactionObject> tran = reg->trans.at(tx);
-    reg->lock_trans.unlock_shared();
+    // reg->lock_trans.lock_shared();
+    // shared_ptr<TransactionObject> tran = reg->trans.at(tx);
+    // reg->lock_trans.unlock_shared();
+    TransactionObject* tran = reinterpret_cast<TransactionObject*>(tx);
     if (tran->is_ro) {
         removeT(tran, false);
         return true;
@@ -311,9 +314,10 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
 bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* target) noexcept {
     // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
-    reg->lock_trans.lock_shared();
-    shared_ptr<TransactionObject> tran = reg->trans.at(tx);
-    reg->lock_trans.unlock_shared();
+    // reg->lock_trans.lock_shared();
+    // shared_ptr<TransactionObject> tran = reg->trans.at(tx);
+    // reg->lock_trans.unlock_shared();
+    TransactionObject* tran = reinterpret_cast<TransactionObject*>(tx);
     shared_ptr<MemorySegment> seg = nullptr;
     for (size_t i = 0; i < size; i+=reg->align) {
         void* word = const_cast<void*>(source) + i;
@@ -382,9 +386,10 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
 bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* target) noexcept {
     //std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
-    reg->lock_trans.lock_shared();
-    shared_ptr<TransactionObject> tran = reg->trans.at(tx);
-    reg->lock_trans.unlock_shared();
+    // reg->lock_trans.lock_shared();
+    // shared_ptr<TransactionObject> tran = reg->trans.at(tx);
+    // reg->lock_trans.unlock_shared();
+    TransactionObject* tran = reinterpret_cast<TransactionObject*>(tx);
     shared_ptr<MemorySegment> seg = nullptr;
     for (size_t i = 0; i < size; i+=reg->align) {
         void* word = target + i;
@@ -432,9 +437,10 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
 Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
     // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
-    reg->lock_trans.lock_shared();
-    shared_ptr<TransactionObject> tran = reg->trans.at(tx);
-    reg->lock_trans.unlock_shared();
+    // reg->lock_trans.lock_shared();
+    // shared_ptr<TransactionObject> tran = reg->trans.at(tx);
+    // reg->lock_trans.unlock_shared();
+    TransactionObject* tran = reinterpret_cast<TransactionObject*>(tx);
     shared_ptr<MemorySegment> new_seg = make_shared<MemorySegment>(size);
     if (unlikely(!new_seg)) {
         return Alloc::nomem;
@@ -469,9 +475,10 @@ bool tm_free(shared_t shared, tx_t tx, void* target) noexcept {
     // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
     shared_ptr<MemorySegment> seg = nullptr;
-    reg->lock_trans.lock_shared();
-    shared_ptr<TransactionObject> tran = reg->trans.at(tx);
-    reg->lock_trans.unlock_shared();
+    // reg->lock_trans.lock_shared();
+    // shared_ptr<TransactionObject> tran = reg->trans.at(tx);
+    // reg->lock_trans.unlock_shared();
+    TransactionObject* tran = reinterpret_cast<TransactionObject*>(tx);
     if (tran->allocated.count(target) == 1) {
         seg = tran->allocated[target];
         tran->writes[seg.get()]->type = WriteType::free;
