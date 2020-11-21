@@ -25,6 +25,7 @@ Region::~Region() {
 WordLock::WordLock() {
     this->version.store(0);
     this->is_freed.store(false);
+    this->is_locked.store(false);
     return;
 }
 

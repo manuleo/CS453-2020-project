@@ -15,6 +15,7 @@
 #include <set>
 #include <unordered_set>
 #include <functional>
+#include <cmath>
 
 // Requested features
 #ifndef _GNU_SOURCE
@@ -93,6 +94,7 @@ public:
     recursive_timed_mutex lock;
     atomic_uint version;
     atomic_bool is_freed;
+    atomic_bool is_locked;
     WordLock();
     ~WordLock();
     WordLock(const WordLock&) = delete;
@@ -127,18 +129,28 @@ public:
     shared_ptr<MemorySegment> segment;
     WriteType type;
     bool allocated;
-    list<shared_ptr<WordLock>> lock_frees;
+    vector<shared_ptr<WordLock>> lock_frees;
     bool will_be_freed;
     Write(shared_ptr<WordLock> lock, shared_ptr<MemorySegment> segment, WriteType type);
     ~Write();
 };
 
-
-struct hash_pair {
-    size_t operator()(const pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>> &pair ) const
-    {
-        return hash<shared_ptr<WordLock>>()(pair.first) ^ hash<shared_ptr<MemorySegment>>()(pair.second);
+struct hash_ptr {
+    size_t operator()(const void* val) const {
+        static const size_t shift = (size_t)log2(1 + sizeof(val));
+        return (size_t)(val) >> shift;
     }
+};
+
+struct hash_pair { 
+    size_t operator()(const pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>>& p) const
+    { 
+        static const size_t shift1 = (size_t)log2(1 + sizeof(p.first.get()));
+        auto hash1 = (size_t)(p.first.get()) >> shift1;
+        static const size_t shift2 = (size_t)log2(1 + sizeof(p.second.get()));
+        auto hash2 = (size_t)(p.second.get()) >> shift2;
+        return hash1 ^ hash2; 
+    } 
 };
 
 class TransactionObject {
@@ -147,10 +159,10 @@ public:
     bool is_ro;
     uint rv;
     uint wv;
-    unordered_map<void*, Write*> writes;
+    unordered_map<void*, Write*, hash_ptr> writes;
     list<void*> order_writes;
     unordered_set<pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>>, hash_pair> reads;
-    unordered_map<void*, shared_ptr<MemorySegment>> allocated;
+    unordered_map<void*, shared_ptr<MemorySegment>, hash_ptr> allocated;
     bool removed;
     TransactionObject(uint t_id, bool is_ro, uint rv);
     ~TransactionObject();
@@ -160,7 +172,7 @@ public:
 class Region {
 public:
     atomic_uint clock;
-    unordered_map<void*, shared_ptr<MemorySegment>> memory;
+    unordered_map<void*, shared_ptr<MemorySegment>, hash_ptr> memory;
     void* first_word;
     shared_mutex lock_mem;
     atomic_uint tran_counter;

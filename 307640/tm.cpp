@@ -44,8 +44,9 @@ void removeT(TransactionObject* tran, bool failed) {
     return;
 }
 
-void freeLocks(unordered_map<void*,list<unique_lock<recursive_timed_mutex>*>>* acq_locks) {
+void freeLocks(unordered_map<void*,list<unique_lock<recursive_timed_mutex>*>, hash_ptr>* acq_locks, TransactionObject* tran) {
     for (auto const& pair : *acq_locks) {
+        tran->writes[pair.first]->lock->is_locked.store(false);
         for (auto const& lock: pair.second) {
             lock->unlock();
             delete lock;
@@ -149,7 +150,7 @@ size_t tm_align(shared_t shared) noexcept {
  * @return Opaque transaction ID, 'invalid_tx' on failure
 **/
 tx_t tm_begin(shared_t shared, bool is_ro) noexcept {
-    // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    //std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
     uint t_id = ++reg->tran_counter;
     TransactionObject* tran = new TransactionObject(t_id, is_ro, reg->clock.load());
@@ -158,7 +159,7 @@ tx_t tm_begin(shared_t shared, bool is_ro) noexcept {
     }
     // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
-    // if (dur > 100000)
+    // if (dur > 1000)
     //     std::cout << "tm_begin time difference = " << dur << "[ns]" << std::endl;
     return reinterpret_cast<tx_t>(tran);
 }
@@ -169,7 +170,7 @@ tx_t tm_begin(shared_t shared, bool is_ro) noexcept {
  * @return Whether the whole transaction committed
 **/
 bool tm_end(shared_t shared, tx_t tx) noexcept {
-    // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    //std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
     // reg->lock_trans.lock_shared();
     // shared_ptr<TransactionObject> tran = reg->trans.at(tx);
@@ -179,19 +180,23 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
         removeT(tran, false);
         return true;
     }
-    chrono::nanoseconds try_dur(100);
-    unordered_map<void*, list<unique_lock<recursive_timed_mutex>*>> acq_locks;
-    for (auto &write : tran->writes) {
-        if (likely(write.second->type == WriteType::write || write.second->type == WriteType::dummy)) {
-            unique_lock<recursive_timed_mutex>* new_lock = new unique_lock<recursive_timed_mutex>(write.second->lock->lock, defer_lock);
+    chrono::nanoseconds try_dur(10);
+    unordered_map<void*, list<unique_lock<recursive_timed_mutex>*>, hash_ptr> acq_locks;
+    set<void*> keys;
+    for (auto& write : tran->writes) keys.insert(write.first);
+    for (auto &write_key : keys) {
+        Write* write = tran->writes[write_key];
+        if (likely(write->type == WriteType::write || write->type == WriteType::dummy)) {
+            unique_lock<recursive_timed_mutex>* new_lock = new unique_lock<recursive_timed_mutex>(write->lock->lock, defer_lock);
             if (unlikely(!(new_lock->try_lock_for(try_dur)))) {
+                freeLocks(&acq_locks, tran);
                 removeT(tran, true);
-                freeLocks(&acq_locks);
                 return false;
             }
-            acq_locks[write.first].push_back(new_lock);
-            if (unlikely(write.second->will_be_freed))
-                acq_locks[write.first].push_back(new unique_lock<recursive_timed_mutex>(write.second->lock->lock));
+            write->lock->is_locked.store(true);
+            acq_locks[write_key].push_back(new_lock);
+            if (unlikely(write->will_be_freed))
+                acq_locks[write_key].push_back(new unique_lock<recursive_timed_mutex>(write->lock->lock));
         }
     }
     tran->wv = ++reg->clock;
@@ -204,7 +209,7 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
                     if (read.second.unique())
                         cleanSeg(read.second);
                 }
-                freeLocks(&acq_locks);
+                freeLocks(&acq_locks, tran);
                 removeT(tran, true);
                 return false;
             }
@@ -219,7 +224,7 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
                 else
                     write.second->segment.reset();
                 removeT(tran, true);
-                freeLocks(&acq_locks);
+                freeLocks(&acq_locks, tran);
                 return false;
             }
         }
@@ -230,6 +235,8 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
         if (likely(w->type == WriteType::write)) {
             w->lock->version.store(tran->wv);
             memcpy(addr, w->data, reg->align);
+            if (likely(!w->will_be_freed))
+                w->lock->is_locked.store(false);
             acq_locks[addr].front()->unlock();
             delete acq_locks[addr].front();
             acq_locks[addr].pop_front();
@@ -246,6 +253,8 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
         }
         else if (unlikely(w->type == WriteType::dummy)) {
             w->lock->version.store(tran->wv);
+            if (unlikely(!w->will_be_freed))
+                w->lock->is_locked.store(false);
             acq_locks[addr].front()->unlock();
             delete acq_locks[addr].front();
             acq_locks[addr].pop_front();
@@ -253,13 +262,14 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
                 acq_locks.erase(addr);
         }
         else if (unlikely(w->type == WriteType::free)) {
-            w->segment->is_freed.store(true);
-            for (auto& free_lock: w->lock_frees) {
-                    free_lock->version.store(tran->wv);
-                    free_lock->is_freed.store(true);
-            }
             void* start_segment = w->segment->data;
-            if (unlikely(w->allocated)) {
+            if (likely(w->allocated)) {
+                w->segment->is_freed.store(true);
+                for (auto& free_lock: w->lock_frees) {
+                        free_lock->version.store(tran->wv);
+                        free_lock->is_freed.store(true);
+                        free_lock->is_locked.store(false);
+                }
                 // Segment was allocated (either by the transaction itself or by someone else before)
                 reg->lock_mem.lock();
                 for (size_t i = 0; i < w->segment->size; i+=reg->align) {
@@ -292,9 +302,9 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
     removeT(tran, false);
     // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
-    // if (dur > 100000)
+    // if (dur > 10000)
     //     std::cout << "tm_end time difference = " << dur << "[ns]" << std::endl;
-//    std::cout << "tm_end time difference = " << std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count() << "[ns]" << std::endl;
+    //std::cout << "tm_end time difference = " << std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count() << "[ns]" << std::endl;
 
     return true;
 }
@@ -308,7 +318,7 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
  * @return Whether the whole transaction can continue
 **/
 bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* target) noexcept {
-    // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    //std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
     // reg->lock_trans.lock_shared();
     // shared_ptr<TransactionObject> tran = reg->trans.at(tx);
@@ -360,19 +370,21 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
                 removeT(tran, true);
                 return false;
             }
-            if (unlikely(!word_lock->lock.try_lock())) {
+            if (unlikely(word_lock->is_locked.load())) {
                 removeT(tran, true);
                 return false;
             }
             word_lock->lock.unlock();
             if (unlikely(!tran->is_ro)) {
                 pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>> seg_word_pair = make_pair(word_lock, seg);
-                if (tran->reads.count(seg_word_pair) == 0)
-                        tran->reads.insert(seg_word_pair);
+                tran->reads.insert(seg_word_pair);
             }
         }
     }
     // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
+    // if (dur > 10000)
+    //     std::cout << "tm_read time difference = " << dur << "[ns]" << std::endl;
     // std::cout << "tm_read time difference = " << std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count() << "[ns]" << std::endl;
 
     return true;
