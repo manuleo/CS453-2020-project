@@ -177,6 +177,9 @@ private:
                 start = segment.next;
             }
             nbaccounts = count;
+            if (sum != static_cast<Balance>(init_balance * count)) {
+                std::cout << "Sum " << sum << " Expected: " << init_balance*count << std::endl;
+            }
             return sum == static_cast<Balance>(init_balance * count);
         });
     }
@@ -322,6 +325,9 @@ public:
             });
             auto correct = transactional(tm, Transaction::Mode::read_only, [&](Transaction& tx) {
                 Shared<size_t> counter{tx, tm.get_start()};
+                if (counter != init_counter) {
+                    std::cout << "Counter " << counter << "Expected: " << init_counter << std::endl;
+                }
                 return counter == init_counter;
             });
             if (unlikely(!correct)) {
@@ -353,6 +359,9 @@ public:
         if (uid == 0) {
             auto correct = transactional(tm, Transaction::Mode::read_only, [&](Transaction& tx) {
                 Shared<size_t> counter{tx, tm.get_start()};
+                if (counter != 0) {
+                    std::cout << "Counter " << counter << " Expected: " << 0 << std::endl;
+                }
                 return counter == 0;
             });
             if (unlikely(!correct))
