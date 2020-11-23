@@ -16,6 +16,12 @@ Region::Region(size_t size, size_t align) {
     this->align = align;
     this->clock.store(0);
     this->tran_counter.store(0);
+    // this->tot_read_dur.store(0);
+    // this->tot_write_dur.store(0);
+    // this->tot_end_dur.store(0);
+    // this->tot_read.store(0);
+    // this->tot_write.store(0);
+    // this->tot_end.store(0);
 }
 
 Region::~Region() {

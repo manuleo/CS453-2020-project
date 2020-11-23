@@ -91,7 +91,7 @@ using std::shared_mutex;
 
 class WordLock {
 public:
-    recursive_timed_mutex lock;
+    timed_mutex lock;
     atomic_uint version;
     atomic_bool is_freed;
     atomic_bool is_locked;
@@ -176,6 +176,12 @@ public:
     void* first_word;
     shared_mutex lock_mem;
     atomic_uint tran_counter;
+    // atomic_int64_t tot_read_dur;
+    // atomic_int64_t tot_write_dur;
+    // atomic_int64_t tot_end_dur;
+    // atomic_uint tot_read;
+    // atomic_uint tot_write;
+    // atomic_uint tot_end;
     // shared_mutex lock_trans;
     // unordered_map<uint, shared_ptr<TransactionObject>> trans;
     size_t size;
