@@ -1,67 +1,67 @@
 #include "help.hpp"
 
-
-MemorySegment::MemorySegment(size_t size) {
-    this->size = size;
-    this->is_freed.store(false);
+Batcher::Batcher() {
+    this->blocked.store(0);
+    this->remaining.store(0);
+    this->waiting.store(false);
     return;
 }
 
-MemorySegment::~MemorySegment() {
+Batcher::~Batcher() {
+    return;
+}
+
+void Batcher::enter() {
+    uint expected = 0;
+    if (likely(!this->remaining.compare_exchange_strong(expected, 1))) {
+        shared_lock<shared_mutex> lock_cv{this->cv_change};
+        this->blocked++;
+        if (unlikely(!this->waiting.load()))
+            this->waiting.store(true);
+        this->cv.wait(lock_cv, [=]{return !this->waiting.load();});
+    }
+    return;
+}
+
+void Batcher::leave() {
+    lock_guard<shared_mutex> lock_cv{this->cv_change};
+    this->remaining--;
+    if (this->remaining.load() == 0) {
+        this->remaining.store(blocked.load());
+        this->blocked.store(0);
+        this->waiting.store(false);
+        this->cv.notify_all();
+    }
     return;
 }
 
 Region::Region(size_t size, size_t align) {
     this->size = size;
     this->align = align;
-    this->clock.store(0);
     this->tran_counter.store(0);
-    // this->tot_read_dur.store(0);
-    // this->tot_write_dur.store(0);
-    // this->tot_end_dur.store(0);
-    // this->tot_read.store(0);
-    // this->tot_write.store(0);
-    // this->tot_end.store(0);
 }
 
 Region::~Region() {
     return;
 }
 
-WordLock::WordLock() {
-    this->version.store(0);
-    this->is_freed.store(false);
-    this->is_locked.store(false);
+WordControl::WordControl() {
+    this->read_version.store(0);
+    this->write_tran.store(-1);
+    this->read_tran.store(-1);
     return;
 }
 
-WordLock::~WordLock() {
+WordControl::~WordControl() {
     return;
 }
 
-TransactionObject::TransactionObject(uint t_id, bool is_ro, uint rv) {
+Transaction::Transaction(uint t_id, bool is_ro) {
     this->t_id = t_id;
     this->is_ro = is_ro;
-    this->rv = rv;
-    this->removed = false;
-}
-
-TransactionObject::~TransactionObject() {
     return;
 }
 
-Write::Write(shared_ptr<WordLock> lock, shared_ptr<MemorySegment> segment, WriteType type) {
-    this->lock = lock;
-    this->segment = segment;
-    this->type = type;
-    if (type == WriteType::alloc)
-        this->allocated = false;
-    else
-        this->allocated = true;
-    this->will_be_freed = false;
-    this->data = nullptr;
-}
-
-Write::~Write() {
+Transaction::~Transaction() {
     return;
 }
