@@ -83,6 +83,8 @@ static inline void pause() {
 
 using namespace std;
 
+class Region;
+
 class Batcher {
 public:
     atomic_uint remaining;
@@ -90,7 +92,8 @@ public:
     atomic_bool waiting;
     condition_variable_any cv;
     shared_mutex cv_change;
-    Batcher();
+    Region* reg;
+    Batcher(Region* reg);
     ~Batcher();
     Batcher(const Batcher&) = delete;
     Batcher& operator=(const Batcher&) = delete; 
@@ -126,9 +129,12 @@ struct hash_ptr {
 
 class Transaction {
 public:
-    uint t_id;
+    int t_id;
     bool is_ro;
-    Transaction(uint t_id, bool is_ro);
+    unordered_map<void*, pair<void*, WordControl*>, hash_ptr> allocated;
+    vector<pair<void*, size_t>> alloc_size;
+    vector<void*> frees;
+    Transaction(int t_id, bool is_ro);
     ~Transaction();
 };
 
@@ -146,12 +152,19 @@ public:
 
 class Region {
 public:
-    Batcher batcher;
+    Batcher* batcher;
     unordered_map<void*, pair<void*, WordControl*>, hash_ptr> memory;
+    unordered_map<void*, size_t, hash_ptr> memory_sizes;
+    list<void*> to_free;
+    unordered_map<void*, pair<void*, WordControl*>, hash_ptr> to_allocate;
+    mutex lock_alloc;
+    mutex lock_free;
     void* first_word;
     atomic_uint tran_counter;
     size_t size;
     size_t align;
     Region(size_t size, size_t align);
     ~Region(); 
+public:
+    void end_epoch();
 };
