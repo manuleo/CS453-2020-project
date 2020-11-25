@@ -175,7 +175,7 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
         // TODO: check if we need the lock
         //shared_lock<shared_mutex> write_check_lock{word_struct.second->lock_write};
         void* write_copy = word_struct.first + (word_struct.second->read_version ? 0 : reg->align);
-        if (likely(word_struct.second->write_tran.load() != -1 && word_struct.second->write_tran.load() == tran->t_id)) {
+        if (likely(word_struct.second->write_tran.load() == tran->t_id)) {
             memcpy(target+i, write_copy, reg->align);
             //write_check_lock.unlock();
             continue;

@@ -87,11 +87,12 @@ class Region;
 
 class Batcher {
 public:
-    atomic_uint remaining;
+    atomic_int remaining;
     atomic_uint blocked;
     atomic_bool waiting;
     condition_variable_any cv;
     shared_mutex cv_change;
+    mutex block_rem;
     Region* reg;
     Batcher(Region* reg);
     ~Batcher();

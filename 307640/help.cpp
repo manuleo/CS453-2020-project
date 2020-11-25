@@ -13,26 +13,35 @@ Batcher::~Batcher() {
 }
 
 void Batcher::enter() {
-    uint expected = 0;
+    int expected = 0;
     if (likely(!this->remaining.compare_exchange_strong(expected, 1))) {
         shared_lock<shared_mutex> lock_cv{this->cv_change};
-        this->blocked++;
-        if (unlikely(!this->waiting.load()))
-            this->waiting.store(true);
-        this->cv.wait(lock_cv, [=]{return this->waiting.load();});
+        // unique_lock<mutex> lock_block_rem{this->block_rem};
+        // this->blocked++;
+        // if (unlikely(!this->waiting.load()))
+        //     this->waiting.store(true);
+        // lock_block_rem.unlock();
+        // this->cv.wait(lock_cv, [=]{return !this->waiting.load();});
+        this->cv.wait(lock_cv, [=]{return this->remaining==0;});
+        this->remaining++;
     }
     return;
 }
 
 void Batcher::leave() {
-    lock_guard<shared_mutex> lock_cv{this->cv_change};
+    this->cv_change.lock();
     this->remaining--;
     if (this->remaining.load() == 0) {
         this->reg->end_epoch();
-        this->remaining.store(blocked.load());
-        this->blocked.store(0);
-        this->waiting.store(false);
+        // unique_lock<mutex> lock_block_rem{this->block_rem};
+        // this->remaining.store(blocked.load());
+        // this->blocked.store(0);
+        // this->waiting.store(false);
+        // lock_block_rem.unlock();
+        this->cv_change.unlock();
         this->cv.notify_all();
+    } else {
+        this->cv_change.unlock();
     }
     return;
 }
