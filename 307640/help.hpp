@@ -108,11 +108,13 @@ public:
 
 class WordControl {
 public:
-    shared_mutex lock_read;
-    shared_mutex lock_write;
+    //shared_mutex lock_read;
+    //shared_mutex lock_write;
     atomic_bool read_version;
-    atomic_int write_tran;
-    atomic_int read_tran;
+    atomic_bool written;
+    atomic_int access;
+    atomic_bool commit_write;
+    //atomic_int read_tran;
     WordControl();
     ~WordControl();
     WordControl(const WordControl&) = delete;
@@ -132,9 +134,11 @@ class Transaction {
 public:
     int t_id;
     bool is_ro;
-    unordered_map<void*, pair<void*, WordControl*>, hash_ptr> allocated;
+    //unordered_map<void*, pair<void*, WordControl*>, hash_ptr> allocated;
+    map<void*, pair<void*, WordControl*>> allocated;
     vector<pair<void*, size_t>> alloc_size;
     vector<void*> frees;
+    vector<WordControl*> writes;
     Transaction(int t_id, bool is_ro);
     ~Transaction();
 };
@@ -154,10 +158,13 @@ public:
 class Region {
 public:
     Batcher* batcher;
-    unordered_map<void*, pair<void*, WordControl*>, hash_ptr> memory;
-    unordered_map<void*, size_t, hash_ptr> memory_sizes;
+    // unordered_map<void*, pair<void*, WordControl*>, hash_ptr> memory;
+    // unordered_map<void*, size_t, hash_ptr> memory_sizes;
+    map<void*, pair<void*, WordControl*>> memory;
+    map<void*, size_t> memory_sizes;
     list<void*> to_free;
-    unordered_map<void*, pair<void*, WordControl*>, hash_ptr> to_allocate;
+    //unordered_map<void*, pair<void*, WordControl*>, hash_ptr> to_allocate;
+    map<void*, pair<void*, WordControl*>> to_allocate;
     mutex lock_alloc;
     mutex lock_free;
     void* first_word;

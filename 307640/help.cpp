@@ -75,19 +75,23 @@ void Region::end_epoch() {
         this->to_free.clear();
     }
     for (auto const& word_struct: this->memory) {
-        if (likely(word_struct.second.second->write_tran.load()!=-1)) {
+        if (likely(word_struct.second.second->commit_write.load())) {
             bool read_ver = word_struct.second.second->read_version.load();
             word_struct.second.second->read_version.store(!read_ver);
-            word_struct.second.second->write_tran.store(-1);
+            word_struct.second.second->written.store(false);
+            word_struct.second.second->commit_write.store(false);
         }
-        word_struct.second.second->read_tran.store(-1);
+        word_struct.second.second->access.store(-1);
     }
 }
 
 WordControl::WordControl() {
-    this->read_version.store(0);
-    this->write_tran.store(-1);
-    this->read_tran.store(-1);
+    this->read_version.store(false);
+    // this->write_tran.store(-1);
+    // this->read_tran.store(-1);
+    this->access.store(-1);
+    this->written.store(false);
+    this->commit_write.store(false);
     return;
 }
 
