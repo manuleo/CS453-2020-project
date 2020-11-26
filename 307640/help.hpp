@@ -111,10 +111,11 @@ public:
     //shared_mutex lock_read;
     //shared_mutex lock_write;
     atomic_bool read_version;
-    atomic_bool written;
-    atomic_int access;
+    //atomic_bool written;
+    //atomic_int access;
     atomic_bool commit_write;
-    //atomic_int read_tran;
+    atomic_int read_tran;
+    atomic_int write_tran;
     WordControl();
     ~WordControl();
     WordControl(const WordControl&) = delete;

@@ -31,8 +31,10 @@ void removeT(Transaction* tran, bool failed) {
     }
     if (unlikely(failed)) {
         for (auto const& write: tran->writes) {
-            write->written.store(false);
-            write->access.store(-1);
+            // write->written.store(false);
+            // write->access.store(-1);
+            write->read_tran.store(-1);
+            write->write_tran.store(-1);
         }
     }
     tran->alloc_size.clear();
@@ -157,6 +159,9 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
                 write->commit_write.store(true);
         }
     }
+    // if (tran->writes.size() == 1) {
+    //     cout << "Only 1 write in a short_tx!!!!" << endl;
+    // }
     reg->batcher->leave();
     removeT(tran, false);
     return true;
@@ -190,39 +195,34 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
         // TODO: check if we need the lock
         //shared_lock<shared_mutex> write_check_lock{word_struct.second->lock_write};
         void* write_copy = word_struct.first + (word_struct.second->read_version ? 0 : reg->align);
-        if (likely(word_struct.second->written.load())) {
-            if (likely(word_struct.second->access.load() == tran->t_id)) {
-                memcpy(new_target, write_copy, reg->align);
-                continue;
-            } else {
-                reg->batcher->leave();
-                removeT(tran, true);
-                return false;
-            }
-        } else {
-            word_struct.second->access.store(tran->t_id);
-            memcpy(new_target, read_copy, reg->align);
-            continue;
-        }
-        // if (likely(word_struct.second->write_tran.load() == tran->t_id)) {
-        //     memcpy(target+i, write_copy, reg->align);
-        //     //write_check_lock.unlock();
-        //     continue;
-        // } else if (likely(word_struct.second->write_tran.load() == -1)) {
-        //     // TODO: check if we need a lock shared here just before the copy 
-        //     // (avoiding someone to start writing on the word after we checked the -1)
-        //     memcpy(target+i, read_copy, reg->align);
-        //     // TODO: see if a lock shared just to check if we have already written before locking with unique may improve performance
-        //     // TODO: maybe the lock is not needed at all...removed for now
-        //     // TODO: note that this may be a crucial point for performances!!!
-        //     //unique_lock<shared_mutex> read_lock{word_struct.second->lock_read};
-        //     word_struct.second->read_tran.store(tran->t_id);
-        //     //read_lock.unlock();
+        // if (likely(word_struct.second->written.load())) {
+        //     if (likely(word_struct.second->access.load() == tran->t_id)) {
+        //         memcpy(new_target, write_copy, reg->align);
+        //         continue;
+        //     } else {
+        //         reg->batcher->leave();
+        //         removeT(tran, true);
+        //         return false;
+        //     }
         // } else {
-        //     reg->batcher->leave();
-        //     removeT(tran, true);
-        //     return false;
+        //     word_struct.second->access.store(tran->t_id);
+        //     memcpy(new_target, read_copy, reg->align);
+        //     continue;
         // }
+        if (likely(word_struct.second->write_tran.load() == tran->t_id)) {
+            word_struct.second->read_tran.store(tran->t_id);
+            memcpy(new_target, write_copy, reg->align);
+            continue;
+        } else if (likely(word_struct.second->write_tran.load() == -1)) {
+            // TODO: check if we need a lock shared here just before the copy 
+            // (avoiding someone to start writing on the word after we checked the -1)
+            memcpy(new_target, read_copy, reg->align);
+            word_struct.second->read_tran.store(tran->t_id);
+        } else {
+            removeT(tran, true);
+            reg->batcher->leave();
+            return false;
+        }
     }
     return true;
 }
@@ -249,29 +249,29 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
         void* write_copy = word_struct.first + (word_struct.second->read_version ? 0 : reg->align);
         int expected_tran = -1;
         bool expected_written = false;
-        if (unlikely(word_struct.second->written.load())) {
-            if (unlikely(word_struct.second->access.load() == tran->t_id)){
-                memcpy(write_copy, new_source, reg->align);
-                tran->writes.push_back(word_struct.second);
-                continue;
-            } else {
-                reg->batcher->leave();
-                removeT(tran, true);
-                return false;
-            }
-        } else {
-            if (unlikely(word_struct.second->access.load() != tran->t_id && word_struct.second->access.load() != -1)){
-                reg->batcher->leave();
-                removeT(tran, true);
-                return false;
-            } else {
-                word_struct.second->written.store(true);
-                word_struct.second->access.store(tran->t_id);
-                memcpy(write_copy, new_source, reg->align);
-                tran->writes.push_back(word_struct.second);
-                continue;
-            }
-        }
+        // if (unlikely(word_struct.second->written.load())) {
+        //     if (unlikely(word_struct.second->access.load() == tran->t_id)){
+        //         memcpy(write_copy, new_source, reg->align);
+        //         tran->writes.push_back(word_struct.second);
+        //         continue;
+        //     } else {
+        //         reg->batcher->leave();
+        //         removeT(tran, true);
+        //         return false;
+        //     }
+        // } else {
+        //     if (unlikely(word_struct.second->access.load() != tran->t_id && word_struct.second->access.load() != -1)){
+        //         reg->batcher->leave();
+        //         removeT(tran, true);
+        //         return false;
+        //     } else {
+        //         word_struct.second->written.store(true);
+        //         word_struct.second->access.store(tran->t_id);
+        //         memcpy(write_copy, new_source, reg->align);
+        //         tran->writes.push_back(word_struct.second);
+        //         continue;
+        //     }
+        // }
         // if (likely(word_struct.second->written.compare_exchange_strong(expected_written, true))) {
         //     if (likely(word_struct.second->access.compare_exchange_weak(expected_tran, tran->t_id))) {
         //         memcpy(write_copy, new_source, reg->align);
@@ -297,33 +297,36 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
         //     removeT(tran, true);
         //     return false;
         // }
-        // if (likely(word_struct.second->write_tran.compare_exchange_weak(expected, tran->t_id))) {
-        //     if (unlikely(word_struct.second->read_tran.compare_exchange_weak(expected, tran->t_id))) {
-        //         word_struct.second->write_tran.store(tran->t_id);
-        //         memcpy(write_copy, source+i, reg->align);
-        //         continue;
-        //     } else if (unlikely(word_struct.second->read_tran.load() == tran->t_id)) {
-        //         word_struct.second->write_tran.store(tran->t_id);
-        //         memcpy(write_copy, source+i, reg->align);
-        //         continue;
-        //     }
-        //     else {
-        //         reg->batcher->leave();
-        //         removeT(tran, true);
-        //         return false;
-        //     }
-        //     // // May be not needed, a read would check just the write and another write would abort anyway at the write check
-        //     // // word_struct.second->read_tran.store(tran->t_id);
-        //     // memcpy(write_copy, target+i, reg->align);
-        //     // continue;
-        // } else if (unlikely(word_struct.second->write_tran.load() == tran->t_id)) {
-        //     memcpy(write_copy, source+i, reg->align);
-        //     continue;
-        // } else {
-        //     reg->batcher->leave();
-        //     removeT(tran, true);
-        //     return false;
-        // }
+        int expected = -1;
+        if (likely(word_struct.second->write_tran.compare_exchange_weak(expected, tran->t_id))) {
+            if (unlikely(word_struct.second->read_tran.compare_exchange_weak(expected, tran->t_id))) {
+                word_struct.second->write_tran.store(tran->t_id);
+                memcpy(write_copy, new_source, reg->align);
+                tran->writes.push_back(word_struct.second);
+                continue;
+            } else if (unlikely(expected == tran->t_id)) {
+                word_struct.second->write_tran.store(tran->t_id);
+                memcpy(write_copy, new_source, reg->align);
+                tran->writes.push_back(word_struct.second);
+                continue;
+            }
+            else {
+                removeT(tran, true);
+                reg->batcher->leave();
+                return false;
+            }
+            // // May be not needed, a read would check just the write and another write would abort anyway at the write check
+            // // word_struct.second->read_tran.store(tran->t_id);
+            // memcpy(write_copy, target+i, reg->align);
+            // continue;
+        } else if (unlikely(expected == tran->t_id)) {
+            memcpy(write_copy, new_source, reg->align);
+            continue;
+        } else {
+            removeT(tran, true);
+            reg->batcher->leave();
+            return false;
+        }
     }
     return true;
 }

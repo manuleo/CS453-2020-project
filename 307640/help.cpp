@@ -13,9 +13,9 @@ Batcher::~Batcher() {
 }
 
 void Batcher::enter() {
+    shared_lock<shared_mutex> lock_cv{this->cv_change};
     int expected = 0;
-    if (likely(!this->remaining.compare_exchange_strong(expected, 1))) {
-        shared_lock<shared_mutex> lock_cv{this->cv_change};
+    if (likely(!this->remaining.compare_exchange_strong(expected, 1, memory_order_acquire, memory_order_relaxed))) {
         // unique_lock<mutex> lock_block_rem{this->block_rem};
         // this->blocked++;
         // if (unlikely(!this->waiting.load()))
@@ -23,6 +23,7 @@ void Batcher::enter() {
         // lock_block_rem.unlock();
         // this->cv.wait(lock_cv, [=]{return !this->waiting.load();});
         this->cv.wait(lock_cv, [=]{return this->remaining==0;});
+        lock_cv.unlock();
         this->remaining++;
     }
     return;
@@ -30,8 +31,9 @@ void Batcher::enter() {
 
 void Batcher::leave() {
     this->cv_change.lock();
-    this->remaining--;
-    if (this->remaining.load() == 0) {
+    //this->remaining--;
+    int expected = 1;
+    if (this->remaining.compare_exchange_strong(expected, 0)) {
         this->reg->end_epoch();
         // unique_lock<mutex> lock_block_rem{this->block_rem};
         // this->remaining.store(blocked.load());
@@ -41,7 +43,14 @@ void Batcher::leave() {
         this->cv_change.unlock();
         this->cv.notify_all();
     } else {
-        this->cv_change.unlock();
+        while (!(this->remaining.compare_exchange_strong(expected, expected-1)));
+        if (expected == 1) {
+            this->reg->end_epoch();
+            this->cv_change.unlock();
+            this->cv.notify_all();
+        } else {
+            this->cv_change.unlock();
+        }
     }
     return;
 }
@@ -78,19 +87,20 @@ void Region::end_epoch() {
         if (likely(word_struct.second.second->commit_write.load())) {
             bool read_ver = word_struct.second.second->read_version.load();
             word_struct.second.second->read_version.store(!read_ver);
-            word_struct.second.second->written.store(false);
+            //word_struct.second.second->written.store(false);
             word_struct.second.second->commit_write.store(false);
         }
-        word_struct.second.second->access.store(-1);
+        word_struct.second.second->read_tran.store(-1);
+        word_struct.second.second->write_tran.store(-1);
     }
 }
 
 WordControl::WordControl() {
     this->read_version.store(false);
-    // this->write_tran.store(-1);
-    // this->read_tran.store(-1);
-    this->access.store(-1);
-    this->written.store(false);
+    this->write_tran.store(-1);
+    this->read_tran.store(-1);
+    // this->access.store(-1);
+    // this->written.store(false);
     this->commit_write.store(false);
     return;
 }
