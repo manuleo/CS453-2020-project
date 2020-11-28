@@ -101,10 +101,10 @@ public:
     LockFreeList(): tail(nullptr), size(0) {}
     void add(T data){
         node<T>* new_node = new node<T>(data);
-        auto prevTail = tail.load(std::memory_order_relaxed);
+        auto prevTail = tail.load(memory_order_relaxed);
         do {
             new_node->prev = prevTail;
-        } while (!tail.compare_exchange_weak(prevTail, new_node, std::memory_order_release, std::memory_order_relaxed));
+        } while (!tail.compare_exchange_weak(prevTail, new_node, memory_order_release, memory_order_relaxed));
         size++;
     }
     void destroy() {
@@ -115,7 +115,7 @@ public:
             delete current; 
             current = prev; 
         }
-        this->tail=nullptr;
+        this->tail = nullptr;
         this->size = 0;
     }
 };
@@ -137,8 +137,8 @@ public:
     Batcher& operator=(Batcher&&) = delete;
 
 public:
-    void enter();
-    void leave();
+    void enter(bool is_ro);
+    void leave(bool failed);
 };
 
 class WordControl {
@@ -146,10 +146,10 @@ public:
     atomic_bool read_version;
     //atomic_bool written;
     atomic_int access;
-    //atomic_bool commit_write;
+    atomic_bool commit_write;
     //atomic_int read_tran;
     //atomic_int write_tran;
-    WordControl(): read_version(false), access(-1) {}
+    WordControl(): read_version(false), access(-1), commit_write(false) {}
     //~WordControl();
     WordControl(const WordControl&) = delete;
     WordControl& operator=(const WordControl&) = delete; 
@@ -164,6 +164,13 @@ struct hash_ptr {
     }
 };
 
+class FreeControl {
+public:
+  void* word;
+  bool is_valid;
+  FreeControl(void* word): word(word), is_valid(true) {}
+};
+
 class Transaction {
 public:
     int t_id;
@@ -171,7 +178,7 @@ public:
     //unordered_map<void*, pair<void*, WordControl*>, hash_ptr> allocated;
     list<void*> allocated;
     list<void*> first_allocs;
-    vector<void*> frees;
+    vector<FreeControl*> frees;
     unordered_set<WordControl*, hash_ptr> writes;
     bool failed;
     Transaction(int t_id, bool is_ro): t_id(t_id), is_ro(is_ro), failed(false) {}
@@ -197,12 +204,12 @@ public:
     unordered_map<void*, pair<void*, WordControl*>, hash_ptr> memory;
     unordered_map<void*, size_t, hash_ptr> memory_sizes;
     LockFreeList<WordControl*> written;
-    LockFreeList<void*> to_free;
+    LockFreeList<FreeControl*> to_free;
     void* first_word;
     atomic_uint tran_counter;
     size_t size;
     size_t align;
-    atomic_uint count_end;
+    //atomic_uint count_end;
     Region(size_t size, size_t align);
     //~Region(); 
 public:

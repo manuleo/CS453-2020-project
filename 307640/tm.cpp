@@ -28,6 +28,11 @@
 // atomic_int64_t tot_end_dur;
 // atomic_uint tot_abort_read;
 // atomic_uint tot_abort_write;
+// atomic_uint tot_read;
+// atomic_uint tot_write;
+// atomic_uint tot_enter;
+// atomic_uint tot_leave;
+// atomic_uint tot_end;
 
 /** Create (i.e. allocate + init) a new shared memory region, with one first non-free-able allocated segment of the requested size and alignment.
  * @param size  Size of the first shared segment of memory to allocate (in bytes), must be a positive multiple of the alignment
@@ -68,6 +73,7 @@ void tm_destroy(shared_t shared) noexcept {
     }
     reg->memory_sizes.clear();
     reg->written.destroy();
+    reg->to_free.destroy();
     delete reg->batcher;
     delete reg;
 
@@ -75,7 +81,12 @@ void tm_destroy(shared_t shared) noexcept {
     // cout << "TOT read: " << (float) tot_read_dur << endl;
     // cout << "TOT write: " << (float) tot_write_dur << endl;
     // cout << "TOT enter: " << (float) tot_enter_dur << endl;
-    // cout << "TOT leave: " << (float) tot_end_dur << endl;
+    // cout << "TOT leave: " << (float) tot_leave_dur << endl;
+    // cout << "AVG end: " << (float) tot_end_dur / (float) tot_end << endl;
+    // cout << "AVG read: " << (float) tot_read_dur / (float) tot_read << endl;
+    // cout << "AVG write: " << (float) tot_write_dur / (float) tot_write << endl;
+    // cout << "AVG enter: " << (float) tot_enter_dur / (float) tot_enter << endl;
+    // cout << "AVG leave: " << (float) tot_leave_dur / (float) tot_leave << endl;
     // cout << "TOT abort read: " << tot_abort_read << endl;
     // cout << "TOT abort write: " << tot_abort_write << endl; 
     // cout << "TOT end batch call: " << reg->count_end << endl;
@@ -118,11 +129,12 @@ tx_t tm_begin(shared_t shared, bool is_ro) noexcept {
     if (unlikely(!tran)) {
         return invalid_tx;
     }
-    //std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    reg->batcher->enter();
+    // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    reg->batcher->enter(is_ro);
     // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    // int64_t dur = std::chrono::duration_cast<std::chrono::milliseconds> (end - begin).count();
-    //tot_enter_dur+=dur;
+    // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
+    // tot_enter_dur+=dur;
+    // tot_enter++;
     return reinterpret_cast<tx_t>(tran);
 }
 
@@ -132,54 +144,30 @@ tx_t tm_begin(shared_t shared, bool is_ro) noexcept {
  * @return Whether the whole transaction committed
 **/
 bool tm_end(shared_t shared, tx_t tx) noexcept {
-    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    //std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
-    if (unlikely(!tran->is_ro)) {
-        // if (unlikely(tran->allocated.size()!=0)) {
-        //     unique_lock<mutex> lock_allocation{reg->lock_alloc};
-        //     for (auto const& pair: tran->allocated)
-        //         reg->to_allocate[pair.first] = pair.second;
-        //     for (auto const& pair: tran->alloc_size)
-        //         reg->memory_sizes[pair.first] = pair.second;
-        //     lock_allocation.unlock();
-        // }
-        // if (unlikely(tran->frees.size()!=0)) {
-        //     unique_lock<mutex> lock_frees{reg->lock_free};
-        //     for (auto const& word: tran->frees)
-        //         reg->to_free.push_back(word); 
-        //     lock_frees.unlock();
-        // }
-        // if (likely(tran->writes.size()!=0)) {
-        //     unique_lock<mutex> lock_write{reg->lock_written};
-        //     for (auto const& write: tran->writes)
-        //         reg->written.push_back(write);
-        //     lock_write.unlock();
-        // }
-        // if (unlikely(tran->allocated.size()!=0)) {
-        //     for (auto const& pair: tran->allocated)
-        //         reg->to_allocate.add(make_pair(pair.first, pair.second));
-        //     for (auto const& pair: tran->alloc_size)
-        //         reg->new_sizes.add(pair);
-        // }
-        if (unlikely(tran->frees.size()!=0)) {
-            for (auto const& word: tran->frees)
-                reg->to_free.add(word);
-        }
-        if (likely(tran->writes.size()!=0)) {
-            for (auto const& write: tran->writes)
-                reg->written.add(write);
-        }
-    }
-    //std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
-    reg->batcher->leave();
+    // if (unlikely(!tran->is_ro)) {
+    //     // if (unlikely(tran->frees.size()!=0)) {
+    //     //     for (auto const& word: tran->frees)
+    //     //         reg->to_free.add(word);
+    //     // }
+    //     // if (likely(tran->writes.size()!=0)) {
+    //     //     for (auto const& write: tran->writes)
+    //     //         reg->written.add(write);
+    //     // }
+    // }
+    // std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
+    reg->batcher->leave(false);
     // std::chrono::steady_clock::time_point end_leave = std::chrono::steady_clock::now();
-    // int64_t dur_leave = std::chrono::duration_cast<std::chrono::milliseconds> (end_leave - begin_leave).count();
+    // int64_t dur_leave = std::chrono::duration_cast<std::chrono::nanoseconds> (end_leave - begin_leave).count();
     // tot_leave_dur+=dur_leave;
+    // tot_leave++;
     delete tran;
     // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    // int64_t dur = std::chrono::duration_cast<std::chrono::milliseconds> (end - begin).count();
+    // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
     // tot_end_dur+=dur;
+    // tot_end++;
     return true;
 }
 
@@ -192,7 +180,8 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
  * @return Whether the whole transaction can continue
 **/
 bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* target) noexcept {
-    //std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    // tot_read++;
     Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
     for (size_t i = 0; i < size; i+=reg->align) {
@@ -208,40 +197,10 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
             continue;
         }
         void* write_copy = word_struct.first + (word_struct.second->read_version ? 0 : reg->align);
-        // if (likely(word_struct.second->written.load())) {
-        //     if (likely(word_struct.second->access.load() == tran->t_id)) {
-        //         memcpy(new_target, write_copy, reg->align);
-        //         continue;
-        //     } else {
-        //         reg->batcher->leave();
-        //         tran->failed = true;
-        //         delete tran;
-        //         return false;
-        //     }
-        // } else {
-        //     word_struct.second->access.store(tran->t_id);
-        //     memcpy(new_target, read_copy, reg->align);
-        //     continue;
-        // }
-        // if (likely(word_struct.second->write_tran.load() == tran->t_id)) {
-        //     word_struct.second->read_tran.store(tran->t_id);
-        //     memcpy(new_target, write_copy, reg->align);
-        //     continue;
-        // } else if (likely(word_struct.second->write_tran.load() == -1)) {
-        //     // TODO: check if we need a lock shared here just before the copy 
-        //     // (avoiding someone to start writing on the word after we checked the -1)
-        //     memcpy(new_target, read_copy, reg->align);
-        //     word_struct.second->read_tran.store(tran->t_id);
-        // } else {
-        //     tran->failed = true;
-        //     delete tran;
-        //     reg->batcher->leave();
-        //     return false;
-        // }
         if (likely(word_struct.second->access.load() == tran->t_id)) {
             memcpy(new_target, write_copy, reg->align);
             continue;
-        } else if (word_struct.second->access.load() == -1) {
+        } else if (likely(word_struct.second->access.load() == -1)) {
             memcpy(new_target, read_copy, reg->align);
             continue;
         } else {
@@ -252,20 +211,26 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
                     delete reg->memory.at(word).second;
                     reg->memory.erase(word);
                 }
+                for (auto const& word: tran->first_allocs)
+                    reg->memory_sizes.erase(word);
                 lock_m.unlock();
-                reg->memory_sizes.erase(word);
             }
             delete tran;
-            reg->batcher->leave();
+            // std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
+            reg->batcher->leave(true);
+            // std::chrono::steady_clock::time_point end_leave = std::chrono::steady_clock::now();
+            // int64_t dur_leave = std::chrono::duration_cast<std::chrono::nanoseconds> (end_leave - begin_leave).count();
+            // tot_leave_dur+=dur_leave;
+            // tot_leave++;
             // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-            // int64_t dur = std::chrono::duration_cast<std::chrono::milliseconds> (end - begin).count();
+            // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
             // tot_read_dur+=dur;
             // tot_abort_read++;
             return false;
         }
     }
     // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    // int64_t dur = std::chrono::duration_cast<std::chrono::milliseconds> (end - begin).count();
+    // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
     // tot_read_dur+=dur;
     return true;
 }
@@ -279,7 +244,8 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
  * @return Whether the whole transaction can continue
 **/
 bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* target) noexcept {
-    //std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    // tot_write++;
     Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
     for (size_t i = 0; i < size; i+=reg->align) {
@@ -289,97 +255,12 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
         pair<void*, WordControl*> word_struct = reg->memory.at(word);
         lock_m_shared.unlock();
         void* write_copy = word_struct.first + (word_struct.second->read_version ? 0 : reg->align);
-        // int expected_tran = -1;
-        // bool expected_written = false;
-        // if (unlikely(word_struct.second->written.load())) {
-        //     if (unlikely(word_struct.second->access.load() == tran->t_id)){
-        //         memcpy(write_copy, new_source, reg->align);
-        //         tran->writes.push_back(word_struct.second);
-        //         continue;
-        //     } else {
-        //         reg->batcher->leave();
-        //         tran->failed = true;
-        //         delete tran;
-        //         return false;
-        //     }
-        // } else {
-        //     if (unlikely(word_struct.second->access.load() != tran->t_id && word_struct.second->access.load() != -1)){
-        //         reg->batcher->leave();
-        //         tran->failed = true;
-        //         delete tran;
-        //         return false;
-        //     } else {
-        //         word_struct.second->written.store(true);
-        //         word_struct.second->access.store(tran->t_id);
-        //         memcpy(write_copy, new_source, reg->align);
-        //         tran->writes.push_back(word_struct.second);
-        //         continue;
-        //     }
-        // }
-        // if (likely(word_struct.second->written.compare_exchange_strong(expected_written, true))) {
-        //     if (likely(word_struct.second->access.compare_exchange_weak(expected_tran, tran->t_id))) {
-        //         memcpy(write_copy, new_source, reg->align);
-        //         tran->writes.push_back(word_struct.second);
-        //         continue;
-        //     } else if (likely(expected_tran == tran->t_id)) {
-        //         memcpy(write_copy, new_source, reg->align);
-        //         tran->writes.push_back(word_struct.second);
-        //         continue;
-        //     }
-        //     else {
-        //         word_struct.second->written.store(false);
-        //         reg->batcher->leave();
-        //         removeT(tran, true);
-        //         return false;
-        //     }
-        // } else if (unlikely(word_struct.second->access.load() == tran->t_id)){
-        //     memcpy(write_copy, new_source, reg->align);
-        //     tran->writes.push_back(word_struct.second);
-        //     continue;
-        // } else {
-        //     reg->batcher->leave();
-        //     removeT(tran, true);
-        //     return false;
-        // }
-        // int expected = -1;
-        // if (likely(word_struct.second->write_tran.compare_exchange_weak(expected, tran->t_id))) {
-        //     if (unlikely(word_struct.second->read_tran.compare_exchange_weak(expected, tran->t_id))) {
-        //         word_struct.second->write_tran.store(tran->t_id);
-        //         memcpy(write_copy, new_source, reg->align);
-        //         tran->writes.push_back(word_struct.second);
-        //         continue;
-        //     } else if (unlikely(expected == tran->t_id)) {
-        //         word_struct.second->write_tran.store(tran->t_id);
-        //         memcpy(write_copy, new_source, reg->align);
-        //         tran->writes.push_back(word_struct.second);
-        //         continue;
-        //     }
-        //     else {
-        //         //removeT(tran, true);
-        //         tran->failed = true;
-        //         delete tran;
-        //         reg->batcher->leave();
-        //         return false;
-        //     }
-        //     // // May be not needed, a read would check just the write and another write would abort anyway at the write check
-        //     // // word_struct.second->read_tran.store(tran->t_id);
-        //     // memcpy(write_copy, target+i, reg->align);
-        //     // continue;
-        // } else if (unlikely(expected == tran->t_id)) {
-        //     memcpy(write_copy, new_source, reg->align);
-        //     continue;
-        // } else {
-        //     //removeT(tran, true);
-        //     tran->failed = true;
-        //     delete tran;
-        //     reg->batcher->leave();
-        //     return false;
-        // }
         int expected = -1;
-        if (likely(word_struct.second->access.compare_exchange_strong(expected, tran->t_id))) {
+        if (likely(word_struct.second->access.compare_exchange_weak(expected, tran->t_id))) {
             memcpy(write_copy, new_source, reg->align);
             tran->writes.insert(word_struct.second);
-            //tran->writes.push_back(word_struct.second);
+            reg->written.add(word_struct.second);
+            word_struct.second->commit_write.store(true);
             continue;
         } else if (likely(expected == tran->t_id)) {
             memcpy(write_copy, new_source, reg->align);
@@ -393,20 +274,26 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
                     delete reg->memory.at(word).second;
                     reg->memory.erase(word);
                 }
+                for (auto const& word: tran->first_allocs)
+                    reg->memory_sizes.erase(word);
                 lock_m.unlock();
-                reg->memory_sizes.erase(word);
             }
             delete tran;
-            reg->batcher->leave();
+            // std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
+            reg->batcher->leave(true);
+            // std::chrono::steady_clock::time_point end_leave = std::chrono::steady_clock::now();
+            // int64_t dur_leave = std::chrono::duration_cast<std::chrono::nanoseconds> (end_leave - begin_leave).count();
+            // tot_leave_dur+=dur_leave;
+            // tot_leave++;
             // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-            // int64_t dur = std::chrono::duration_cast<std::chrono::milliseconds> (end - begin).count();
+            // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
             // tot_write_dur+=dur;
             // tot_abort_write++;
             return false;
         }
     }
     // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    // int64_t dur = std::chrono::duration_cast<std::chrono::milliseconds> (end - begin).count();
+    // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
     // tot_write_dur+=dur;
     return true;
 }
@@ -433,8 +320,8 @@ Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
         reg->memory[new_seg+i] = make_pair(iter_word, new WordControl());
         iter_word = iter_word + 2*reg->align;
     }
-    lock_m.unlock();
     reg->memory_sizes[new_seg] = size;
+    lock_m.unlock();
     *target = new_seg;
     return Alloc::success;
 }
@@ -445,8 +332,11 @@ Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
  * @param target Address of the first byte of the previously allocated segment to deallocate
  * @return Whether the whole transaction can continue
 **/
-bool tm_free(shared_t shared as (unused), tx_t tx, void* target) noexcept {
+bool tm_free(shared_t shared, tx_t tx, void* target) noexcept {
+    Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
-    tran->frees.push_back(target);
+    FreeControl* new_free = new FreeControl(target);
+    tran->frees.push_back(new_free);
+    reg->to_free.add(new_free);
     return true;
 }
