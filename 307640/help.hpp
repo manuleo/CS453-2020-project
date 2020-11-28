@@ -17,6 +17,7 @@
 #include <functional>
 #include <cmath>
 #include <condition_variable>
+//#include <lockfreelist.hpp>
 
 // Requested features
 #ifndef _GNU_SOURCE
@@ -83,19 +84,53 @@ static inline void pause() {
 
 using namespace std;
 
+template<typename T>
+struct node
+{
+    T data;
+    node* prev;
+    node(T data) : data(data), prev(nullptr) {}
+};
+ 
+template<typename T>
+class LockFreeList
+{
+public:
+    atomic<node<T>*> tail;
+    atomic_uint size;
+    LockFreeList(): tail(nullptr), size(0) {}
+    void add(T data){
+        node<T>* new_node = new node<T>(data);
+        auto prevTail = tail.load(std::memory_order_relaxed);
+        do {
+            new_node->prev = prevTail;
+        } while (!tail.compare_exchange_weak(prevTail, new_node, std::memory_order_release, std::memory_order_relaxed));
+        size++;
+    }
+    void destroy() {
+        node<T>* current = tail.load();
+        node<T>* prev;
+        while (current != nullptr)  { 
+            prev = current->prev;
+            delete current; 
+            current = prev; 
+        }
+        this->tail=nullptr;
+        this->size = 0;
+    }
+};
+
 class Region;
 
 class Batcher {
 public:
     atomic_int remaining;
-    atomic_uint blocked;
-    atomic_bool waiting;
+    atomic_bool wait;
     condition_variable_any cv;
     shared_mutex cv_change;
-    mutex block_rem;
     Region* reg;
-    Batcher(Region* reg);
-    ~Batcher();
+    Batcher(Region* reg): reg(reg), remaining(0), wait(false) {}
+    //~Batcher();
     Batcher(const Batcher&) = delete;
     Batcher& operator=(const Batcher&) = delete; 
     Batcher(Batcher&&) = delete;
@@ -108,16 +143,14 @@ public:
 
 class WordControl {
 public:
-    //shared_mutex lock_read;
-    //shared_mutex lock_write;
     atomic_bool read_version;
     //atomic_bool written;
-    //atomic_int access;
-    atomic_bool commit_write;
-    atomic_int read_tran;
-    atomic_int write_tran;
-    WordControl();
-    ~WordControl();
+    atomic_int access;
+    //atomic_bool commit_write;
+    //atomic_int read_tran;
+    //atomic_int write_tran;
+    WordControl(): read_version(false), access(-1) {}
+    //~WordControl();
     WordControl(const WordControl&) = delete;
     WordControl& operator=(const WordControl&) = delete; 
     WordControl(WordControl&&) = delete;
@@ -136,11 +169,12 @@ public:
     int t_id;
     bool is_ro;
     //unordered_map<void*, pair<void*, WordControl*>, hash_ptr> allocated;
-    map<void*, pair<void*, WordControl*>> allocated;
-    vector<pair<void*, size_t>> alloc_size;
+    list<void*> allocated;
+    list<void*> first_allocs;
     vector<void*> frees;
-    vector<WordControl*> writes;
-    Transaction(int t_id, bool is_ro);
+    unordered_set<WordControl*, hash_ptr> writes;
+    bool failed;
+    Transaction(int t_id, bool is_ro): t_id(t_id), is_ro(is_ro), failed(false) {}
     ~Transaction();
 };
 
@@ -159,21 +193,18 @@ public:
 class Region {
 public:
     Batcher* batcher;
-    // unordered_map<void*, pair<void*, WordControl*>, hash_ptr> memory;
-    // unordered_map<void*, size_t, hash_ptr> memory_sizes;
-    map<void*, pair<void*, WordControl*>> memory;
-    map<void*, size_t> memory_sizes;
-    list<void*> to_free;
-    //unordered_map<void*, pair<void*, WordControl*>, hash_ptr> to_allocate;
-    map<void*, pair<void*, WordControl*>> to_allocate;
-    mutex lock_alloc;
-    mutex lock_free;
+    shared_mutex lock_mem;
+    unordered_map<void*, pair<void*, WordControl*>, hash_ptr> memory;
+    unordered_map<void*, size_t, hash_ptr> memory_sizes;
+    LockFreeList<WordControl*> written;
+    LockFreeList<void*> to_free;
     void* first_word;
     atomic_uint tran_counter;
     size_t size;
     size_t align;
+    atomic_uint count_end;
     Region(size_t size, size_t align);
-    ~Region(); 
+    //~Region(); 
 public:
     void end_epoch();
 };
