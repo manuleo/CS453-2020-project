@@ -125,7 +125,7 @@ class Region;
 class Batcher {
 public:
     atomic_int remaining;
-    atomic_bool wait;
+    bool wait;
     condition_variable_any cv;
     shared_mutex cv_change;
     Region* reg;
@@ -138,18 +138,18 @@ public:
 
 public:
     void enter(bool is_ro);
-    void leave(bool failed);
+    void leave();
 };
 
 class WordControl {
 public:
-    atomic_bool read_version;
+    bool read_version;
     //atomic_bool written;
     atomic_int access;
-    atomic_bool commit_write;
+    //atomic_bool commit_write;
     //atomic_int read_tran;
     //atomic_int write_tran;
-    WordControl(): read_version(false), access(-1), commit_write(false) {}
+    WordControl(): read_version(false), access(-1) {}
     //~WordControl();
     WordControl(const WordControl&) = delete;
     WordControl& operator=(const WordControl&) = delete; 
@@ -164,12 +164,23 @@ struct hash_ptr {
     }
 };
 
-class FreeControl {
-public:
-  void* word;
-  bool is_valid;
-  FreeControl(void* word): word(word), is_valid(true) {}
-};
+// class FreeControl {
+// public:
+//   void* word;
+//   bool is_valid;
+//   FreeControl(void* word): word(word), is_valid(true) {}
+// };
+
+// struct hash_pair { 
+//     size_t operator()(const pair<void*, WordControl*>& p) const
+//     { 
+//         static const size_t shift1 = (size_t)log2(1 + sizeof(p.first));
+//         auto hash1 = (size_t)(p.first) >> shift1;
+//         static const size_t shift2 = (size_t)log2(1 + sizeof(p.second));
+//         auto hash2 = (size_t)(p.second) >> shift2;
+//         return hash1 ^ hash2; 
+//     } 
+// };
 
 class Transaction {
 public:
@@ -178,23 +189,12 @@ public:
     //unordered_map<void*, pair<void*, WordControl*>, hash_ptr> allocated;
     list<void*> allocated;
     list<void*> first_allocs;
-    vector<FreeControl*> frees;
+    vector<void*> frees;
     unordered_set<WordControl*, hash_ptr> writes;
     bool failed;
     Transaction(int t_id, bool is_ro): t_id(t_id), is_ro(is_ro), failed(false) {}
     ~Transaction();
 };
-
-// struct hash_pair { 
-//     size_t operator()(const pair<shared_ptr<WordLock>, shared_ptr<MemorySegment>>& p) const
-//     { 
-//         static const size_t shift1 = (size_t)log2(1 + sizeof(p.first.get()));
-//         auto hash1 = (size_t)(p.first.get()) >> shift1;
-//         static const size_t shift2 = (size_t)log2(1 + sizeof(p.second.get()));
-//         auto hash2 = (size_t)(p.second.get()) >> shift2;
-//         return hash1 ^ hash2; 
-//     } 
-// };
 
 
 class Region {
@@ -204,7 +204,7 @@ public:
     unordered_map<void*, pair<void*, WordControl*>, hash_ptr> memory;
     unordered_map<void*, size_t, hash_ptr> memory_sizes;
     LockFreeList<WordControl*> written;
-    LockFreeList<FreeControl*> to_free;
+    LockFreeList<void*> to_free;
     void* first_word;
     atomic_uint tran_counter;
     size_t size;

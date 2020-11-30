@@ -72,8 +72,8 @@ void tm_destroy(shared_t shared) noexcept {
         free(pair.first);
     }
     reg->memory_sizes.clear();
-    reg->written.destroy();
-    reg->to_free.destroy();
+    // reg->written.destroy();
+    // reg->to_free.destroy();
     delete reg->batcher;
     delete reg;
 
@@ -147,18 +147,18 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
     //std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
-    // if (unlikely(!tran->is_ro)) {
-    //     // if (unlikely(tran->frees.size()!=0)) {
-    //     //     for (auto const& word: tran->frees)
-    //     //         reg->to_free.add(word);
-    //     // }
-    //     // if (likely(tran->writes.size()!=0)) {
-    //     //     for (auto const& write: tran->writes)
-    //     //         reg->written.add(write);
-    //     // }
-    // }
+    if (unlikely(!tran->is_ro)) {
+        if (unlikely(tran->frees.size()!=0)) {
+            for (auto const& word: tran->frees)
+                reg->to_free.add(word);
+        }
+        if (likely(tran->writes.size()!=0)) {
+            for (auto const& write: tran->writes)
+                reg->written.add(write);
+        }
+    }
     // std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
-    reg->batcher->leave(false);
+    reg->batcher->leave();
     // std::chrono::steady_clock::time_point end_leave = std::chrono::steady_clock::now();
     // int64_t dur_leave = std::chrono::duration_cast<std::chrono::nanoseconds> (end_leave - begin_leave).count();
     // tot_leave_dur+=dur_leave;
@@ -217,7 +217,7 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
             }
             delete tran;
             // std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
-            reg->batcher->leave(true);
+            reg->batcher->leave();
             // std::chrono::steady_clock::time_point end_leave = std::chrono::steady_clock::now();
             // int64_t dur_leave = std::chrono::duration_cast<std::chrono::nanoseconds> (end_leave - begin_leave).count();
             // tot_leave_dur+=dur_leave;
@@ -259,8 +259,9 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
         if (likely(word_struct.second->access.compare_exchange_weak(expected, tran->t_id))) {
             memcpy(write_copy, new_source, reg->align);
             tran->writes.insert(word_struct.second);
-            reg->written.add(word_struct.second);
-            word_struct.second->commit_write.store(true);
+            //tran->writes.insert(word_struct);
+            //reg->written.add(word_struct.second);
+            //word_struct.second->commit_write.store(true);
             continue;
         } else if (likely(expected == tran->t_id)) {
             memcpy(write_copy, new_source, reg->align);
@@ -280,7 +281,7 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
             }
             delete tran;
             // std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
-            reg->batcher->leave(true);
+            reg->batcher->leave();
             // std::chrono::steady_clock::time_point end_leave = std::chrono::steady_clock::now();
             // int64_t dur_leave = std::chrono::duration_cast<std::chrono::nanoseconds> (end_leave - begin_leave).count();
             // tot_leave_dur+=dur_leave;
@@ -310,6 +311,7 @@ Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
     void* new_seg = calloc(size*2/reg->align, reg->align);
     if (unlikely(new_seg == nullptr)) {
+        //cout << "No memory for segment" << endl;
         return Alloc::nomem;
     }
     void* iter_word = new_seg;
@@ -323,6 +325,7 @@ Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
     reg->memory_sizes[new_seg] = size;
     lock_m.unlock();
     *target = new_seg;
+    //cout << "Successfully allocated a new segment! (Still need to be committed)" << endl;
     return Alloc::success;
 }
 
@@ -332,11 +335,11 @@ Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
  * @param target Address of the first byte of the previously allocated segment to deallocate
  * @return Whether the whole transaction can continue
 **/
-bool tm_free(shared_t shared, tx_t tx, void* target) noexcept {
-    Region* reg = (Region*) shared;
+bool tm_free(shared_t shared as (unused), tx_t tx, void* target) noexcept {
+    //Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
-    FreeControl* new_free = new FreeControl(target);
-    tran->frees.push_back(new_free);
-    reg->to_free.add(new_free);
+    //FreeControl* new_free = new FreeControl(target);
+    tran->frees.push_back(target);
+    //reg->to_free.add(new_free);
     return true;
 }
