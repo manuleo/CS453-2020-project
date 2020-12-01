@@ -26,6 +26,7 @@
 // atomic_int64_t tot_leave_dur;
 // atomic_int64_t tot_enter_dur;
 // atomic_int64_t tot_end_dur;
+// atomic_int64_t tot_alloc_dur;
 // atomic_uint tot_abort_read;
 // atomic_uint tot_abort_write;
 // atomic_uint tot_read;
@@ -33,6 +34,7 @@
 // atomic_uint tot_enter;
 // atomic_uint tot_leave;
 // atomic_uint tot_end;
+// atomic_uint tot_alloc;
 
 /** Create (i.e. allocate + init) a new shared memory region, with one first non-free-able allocated segment of the requested size and alignment.
  * @param size  Size of the first shared segment of memory to allocate (in bytes), must be a positive multiple of the alignment
@@ -75,18 +77,22 @@ void tm_destroy(shared_t shared) noexcept {
     // reg->written.destroy();
     // reg->to_free.destroy();
     delete reg->batcher;
-    delete reg;
+    // delete reg;
 
     // cout << "TOT end: " << (float) tot_end_dur << endl;
     // cout << "TOT read: " << (float) tot_read_dur << endl;
     // cout << "TOT write: " << (float) tot_write_dur << endl;
     // cout << "TOT enter: " << (float) tot_enter_dur << endl;
     // cout << "TOT leave: " << (float) tot_leave_dur << endl;
+    // cout << "TOT alloc: " << (float) tot_alloc_dur << endl;
+    // cout << "TOT end batch: " << (float) reg->end_epoch_dur << endl;
     // cout << "AVG end: " << (float) tot_end_dur / (float) tot_end << endl;
     // cout << "AVG read: " << (float) tot_read_dur / (float) tot_read << endl;
     // cout << "AVG write: " << (float) tot_write_dur / (float) tot_write << endl;
     // cout << "AVG enter: " << (float) tot_enter_dur / (float) tot_enter << endl;
     // cout << "AVG leave: " << (float) tot_leave_dur / (float) tot_leave << endl;
+    // cout << "AVG alloc: " << (float) tot_alloc_dur / (float) tot_alloc << endl;
+    // cout << "AVG end batch: " << (float) reg->end_epoch_dur / (float) reg->count_end << endl;
     // cout << "TOT abort read: " << tot_abort_read << endl;
     // cout << "TOT abort write: " << tot_abort_write << endl; 
     // cout << "TOT end batch call: " << reg->count_end << endl;
@@ -144,7 +150,7 @@ tx_t tm_begin(shared_t shared, bool is_ro) noexcept {
  * @return Whether the whole transaction committed
 **/
 bool tm_end(shared_t shared, tx_t tx) noexcept {
-    //std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
     if (unlikely(!tran->is_ro)) {
@@ -158,7 +164,7 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
         }
     }
     // std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
-    reg->batcher->leave();
+    reg->batcher->leave(false);
     // std::chrono::steady_clock::time_point end_leave = std::chrono::steady_clock::now();
     // int64_t dur_leave = std::chrono::duration_cast<std::chrono::nanoseconds> (end_leave - begin_leave).count();
     // tot_leave_dur+=dur_leave;
@@ -217,7 +223,7 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
             }
             delete tran;
             // std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
-            reg->batcher->leave();
+            reg->batcher->leave(true);
             // std::chrono::steady_clock::time_point end_leave = std::chrono::steady_clock::now();
             // int64_t dur_leave = std::chrono::duration_cast<std::chrono::nanoseconds> (end_leave - begin_leave).count();
             // tot_leave_dur+=dur_leave;
@@ -281,7 +287,7 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
             }
             delete tran;
             // std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
-            reg->batcher->leave();
+            reg->batcher->leave(true);
             // std::chrono::steady_clock::time_point end_leave = std::chrono::steady_clock::now();
             // int64_t dur_leave = std::chrono::duration_cast<std::chrono::nanoseconds> (end_leave - begin_leave).count();
             // tot_leave_dur+=dur_leave;
@@ -307,6 +313,8 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
  * @return Whether the whole transaction can continue (success/nomem), or not (abort_alloc)
 **/
 Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
+    // tot_alloc++;
+    // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
     void* new_seg = calloc(size*2/reg->align, reg->align);
@@ -325,6 +333,9 @@ Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
     reg->memory_sizes[new_seg] = size;
     lock_m.unlock();
     *target = new_seg;
+    // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
+    // tot_alloc_dur+=dur;
     //cout << "Successfully allocated a new segment! (Still need to be committed)" << endl;
     return Alloc::success;
 }

@@ -11,8 +11,10 @@ void Batcher::enter(bool is_ro) {
     return;
 }
 
-void Batcher::leave() {
+void Batcher::leave(bool failed) {
     unique_lock<shared_mutex> lock_cv{this->cv_change};
+    // if (failed)
+    //     this->wait = true;
     int expected = 1;
     if (unlikely(this->remaining.compare_exchange_strong(expected, 0))) {
         this->reg->end_epoch();
@@ -34,7 +36,8 @@ Region::Region(size_t size, size_t align) {
 }
 
 void Region::end_epoch() {
-    //this->count_end++;
+    // this->count_end++;
+    // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     if (likely(this->written.size!=0)) {
         for (auto ptr = this->written.tail.load(); ptr != nullptr; ptr = ptr->prev) {
             ptr->data->read_version = !ptr->data->read_version;
@@ -57,6 +60,9 @@ void Region::end_epoch() {
         }
         this->to_free.destroy();
     }
+    // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
+    // this->end_epoch_dur+=dur;
 }
 
 Transaction::~Transaction() {

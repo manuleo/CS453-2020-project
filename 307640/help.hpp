@@ -138,7 +138,7 @@ public:
 
 public:
     void enter(bool is_ro);
-    void leave();
+    void leave(bool failed);
 };
 
 class WordControl {
@@ -209,7 +209,8 @@ public:
     atomic_uint tran_counter;
     size_t size;
     size_t align;
-    //atomic_uint count_end;
+    // atomic_uint count_end;
+    // atomic_int64_t end_epoch_dur;
     Region(size_t size, size_t align);
     //~Region(); 
 public:
