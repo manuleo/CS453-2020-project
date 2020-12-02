@@ -68,23 +68,9 @@
     #warning This compiler has no support for GCC attributes
 #endif
 
-// #if (defined(__i386__) || defined(__x86_64__)) && defined(USE_MM_PAUSE)
-//     #include <xmmintrin.h>
-// #else
-//     #include <sched.h>
-// #endif
-// /** Pause for a very short amount of time.
-// **/
-// static inline void pause() {
-// #if (defined(__i386__) || defined(__x86_64__)) && defined(USE_MM_PAUSE)
-//     _mm_pause();
-// #else
-//     sched_yield();
-// #endif
-// }
-
 using namespace std;
 
+// TODO: may change to 4GB in production
 const size_t MAX_SIZE = sysconf(_SC_PAGE_SIZE)*500000;
 
 typedef struct word{
@@ -147,35 +133,11 @@ public:
     void enter(bool is_ro);
     void leave(bool failed);
 };
-
-// class WordControl {
-// public:
-//     bool read_version;
-//     //atomic_bool written;
-//     atomic_int access;
-//     //atomic_bool commit_write;
-//     //atomic_int read_tran;
-//     //atomic_int write_tran;
-//     WordControl(): read_version(false), access(-1) {}
-//     //~WordControl();
-//     WordControl(const WordControl&) = delete;
-//     WordControl& operator=(const WordControl&) = delete; 
-//     WordControl(WordControl&&) = delete;
-//     WordControl& operator=(WordControl&&) = delete;
-// };
-
 // struct hash_ptr {
 //     size_t operator()(const void* val) const {
 //         static const size_t shift = (size_t)log2(1 + sizeof(val));
 //         return (size_t)(val) >> shift;
 //     }
-// };
-
-// class FreeControl {
-// public:
-//   void* word;
-//   bool is_valid;
-//   FreeControl(void* word): word(word), is_valid(true) {}
 // };
 
 // struct hash_pair { 
@@ -196,7 +158,6 @@ public:
     // TODO: check if changing this to something more granular may help
     vector<void*> writes;
     Transaction(uint t_id, bool is_ro): t_id(t_id), is_ro(is_ro) {}
-    //~Transaction();
 };
 
 
@@ -211,10 +172,7 @@ public:
     void* next_segment;
     mutex lock_alloc;
     size_t tot_size;
-    // atomic_uint count_end;
-    // atomic_int64_t end_epoch_dur;
     Region(size_t size, size_t align);
-    //~Region(); 
 public:
     void end_epoch();
 };
