@@ -142,7 +142,7 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
         void* new_target = target + i;
         void* word = get_word(reg, user_word);
         atomic_uint* access = (atomic_uint*) (word + 2*reg->align);
-        bool* read_version = (bool*)(word + 2*reg->align + sizeof(atomic_uint) + 1);
+        bool* read_version = (bool*)(word + 2*reg->align + sizeof(atomic_uint) + 3);
         void* read_copy = word + (*read_version ? reg->align : 0);
         if (likely(tran->is_ro)) {
             memcpy(new_target, read_copy, reg->align);
@@ -181,7 +181,7 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
         void* new_source = const_cast<void*>(source) + i;
         void* word = get_word(reg, user_word);
         atomic_uint* access = (atomic_uint*) (word + 2*reg->align);
-        bool* read_version = (bool*)(word + 2*reg->align + sizeof(atomic_uint) + 1);
+        bool* read_version = (bool*)(word + 2*reg->align + sizeof(atomic_uint) + 3);
         void* write_copy = word + (*read_version ? 0 : reg->align);
         uint expected = 0;
         if (likely(access->compare_exchange_weak(expected, tran->t_id))) {
@@ -210,7 +210,6 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
 **/
 Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
     Region* reg = (Region*) shared;
-    Transaction* tran = reinterpret_cast<Transaction*>(tx);
     lock_guard<mutex> lock_all{reg->lock_alloc};
     if (unlikely(reg->tot_size + size > MAX_SIZE)) {
         return Alloc::nomem;

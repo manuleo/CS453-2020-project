@@ -39,7 +39,7 @@ void Region::end_epoch() {
     if (likely(this->written.size!=0)) {
         for (auto ptr = this->written.tail.load(); ptr != nullptr; ptr = ptr->prev) {
             atomic_uint* access = (atomic_uint*) (ptr->data + 2*this->align);
-            bool* read_version = (bool*)(ptr->data + 2*this->align + sizeof(atomic_uint) + 1);
+            bool* read_version = (bool*)(ptr->data + 2*this->align + sizeof(atomic_uint) + 3);
             *read_version = !(*read_version);
             access->store(0);
         }
