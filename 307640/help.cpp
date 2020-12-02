@@ -5,7 +5,7 @@ void Batcher::enter(bool is_ro) {
     if (unlikely(this->wait && !is_ro)) {
         this->cv.wait(lock_cv, [=]{return !this->wait;});
     }
-    this->wait = true;
+    //this->wait = true;
     this->remaining++;
     lock_cv.unlock();
     return;
@@ -13,8 +13,8 @@ void Batcher::enter(bool is_ro) {
 
 void Batcher::leave(bool failed) {
     unique_lock<shared_mutex> lock_cv{this->cv_change};
-    // if (failed)
-    //     this->wait = true;
+     if (failed)
+         this->wait = true;
     int expected = 1;
     if (unlikely(this->remaining.compare_exchange_strong(expected, 0))) {
         this->reg->end_epoch();
@@ -40,50 +40,14 @@ void Region::end_epoch() {
     // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     if (likely(this->written.size!=0)) {
         for (auto ptr = this->written.tail.load(); ptr != nullptr; ptr = ptr->prev) {
-            ptr->data->read_version = !ptr->data->read_version;
-            ptr->data->access.store(-1);
-            // ptr->data.second->read_version = !ptr->data.second->read_version;
-            // ptr->data.second->access.store(-1);
+            atomic_uint* access = (atomic_uint*) (ptr->data + 2*this->align);
+            bool* read_version = (bool*)(ptr->data + 2*this->align + sizeof(atomic_uint) + 1);
+            *read_version = !(*read_version);
+            access->store(0);
         }
         this->written.destroy();
-    }
-    if (unlikely(this->to_free.size!=0)) {
-        for (auto ptr = this->to_free.tail.load(); ptr != nullptr; ptr = ptr->prev) {
-            void* word = ptr->data;
-            size_t seg_size = this->memory_sizes[word];
-            for (size_t i = 0; i < seg_size; i+=this->align) {
-                delete this->memory[word+i].second;
-                this->memory.erase(word+i);
-            }
-            this->memory_sizes.erase(word);
-            free(word);
-        }
-        this->to_free.destroy();
     }
     // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
     // this->end_epoch_dur+=dur;
-}
-
-Transaction::~Transaction() {
-    if (unlikely(this->failed)) {
-        if (unlikely(this->first_allocs.size()!=0)) {
-            //cout << "Unallocating an allocated segment by this transaction" << endl;
-            for (auto const& word: this->first_allocs)
-                free(word);
-        }
-        for (auto const& write: this->writes) {
-            //write->written.store(false);
-            write->access.store(-1);
-            //write->commit_write.store(false);
-            // write->read_tran.store(-1);
-            // write->write_tran.store(-1);
-        }
-    }
-    //this->alloc_size.clear();
-    this->first_allocs.clear();
-    this->allocated.clear();
-    this->frees.clear();
-    this->writes.clear();
-    return;
 }

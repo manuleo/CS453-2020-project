@@ -348,6 +348,7 @@ public:
                 if (unlikely(value > last))
                     return false;
                 counter = value - 1;
+                //std::cout << "Counter " << counter << std::endl;
                 return true;
             });
             if (unlikely(!correct)) {

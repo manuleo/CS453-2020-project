@@ -19,6 +19,19 @@
 
 // -------------------------------------------------------------------------- //
 
+inline void* get_word (Region* reg, void* word) {
+    ptrdiff_t id = ((char*)word - (char*)reg->start)/reg->align;
+    return reg->start + id*sizeof(Word);
+}
+
+inline void clear_writes(Region* reg, vector<void*>* writes) {
+    for (auto const& write: *writes) {
+        atomic_uint* access = (atomic_uint*) (write + 2*reg->align);
+        access->store(0);
+    }
+    writes->clear();
+}
+
 // -------------------------------------------------------------------------- //
 
 // atomic_int64_t tot_read_dur;
@@ -46,18 +59,14 @@ shared_t tm_create(size_t size, size_t align) noexcept {
     if (unlikely(!reg)) {
         return invalid_shared;
     }
-    void* first = calloc(size*2/reg->align, align);
-    if (unlikely(first == nullptr)) {
+    // TODO: may change to 4GB in production
+    reg->start = mmap(NULL, MAX_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (unlikely(reg->start == nullptr)) {
         delete reg;
         return invalid_shared;
     }
-    void* iter_word = first;
-    for (size_t i = 0; i < size; i+=align) {
-        reg->memory[first+i] = make_pair(iter_word, new WordControl());
-        iter_word = iter_word + 2*align;
-    }
-    reg->first_word = first;
-    reg->memory_sizes[first] = size;
+    reg->next_segment = reg->start + size*sizeof(Word);
+    reg->tot_size+=size;
     return reg;
 }
 
@@ -66,18 +75,11 @@ shared_t tm_create(size_t size, size_t align) noexcept {
 **/
 void tm_destroy(shared_t shared) noexcept {
     Region* reg = (Region*) shared;
-    for (auto const& pair: reg->memory) {
-        delete pair.second.second;
-    }
-    reg->memory.clear();
-    for (auto const& pair: reg->memory_sizes) {
-        free(pair.first);
-    }
-    reg->memory_sizes.clear();
-    // reg->written.destroy();
-    // reg->to_free.destroy();
+    munmap(reg->start, MAX_SIZE);
+    if (unlikely(reg->written.size!=0))
+        reg->written.destroy();
     delete reg->batcher;
-    // delete reg;
+    delete reg;
 
     // cout << "TOT end: " << (float) tot_end_dur << endl;
     // cout << "TOT read: " << (float) tot_read_dur << endl;
@@ -104,7 +106,7 @@ void tm_destroy(shared_t shared) noexcept {
  * @return Start address of the first allocated segment
 **/
 void* tm_start(shared_t shared) noexcept {
-    return ((Region*)shared)->first_word;
+    return ((Region*)shared)->start;
 }
 
 /** [thread-safe] Return the size (in bytes) of the first allocated segment of the shared memory region.
@@ -154,10 +156,6 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
     Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
     if (unlikely(!tran->is_ro)) {
-        if (unlikely(tran->frees.size()!=0)) {
-            for (auto const& word: tran->frees)
-                reg->to_free.add(word);
-        }
         if (likely(tran->writes.size()!=0)) {
             for (auto const& write: tran->writes)
                 reg->written.add(write);
@@ -191,36 +189,25 @@ bool tm_read(shared_t shared, tx_t tx, void const* source, size_t size, void* ta
     Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
     for (size_t i = 0; i < size; i+=reg->align) {
-        void* word = const_cast<void*>(source) + i;
+        void* user_word = const_cast<void*>(source) + i;
         void* new_target = target + i;
-        //pair<void*, WordControl*> word_struct;
-        shared_lock<shared_mutex> lock_m_shared{reg->lock_mem};
-        pair<void*, WordControl*> word_struct = reg->memory.at(word);
-        lock_m_shared.unlock();
-        void* read_copy = word_struct.first + (word_struct.second->read_version ? reg->align : 0);
+        void* word = get_word(reg, user_word);
+        atomic_uint* access = (atomic_uint*) (word + 2*reg->align);
+        bool* read_version = (bool*)(word + 2*reg->align + sizeof(atomic_uint) + 1);
+        void* read_copy = word + (*read_version ? reg->align : 0);
         if (likely(tran->is_ro)) {
             memcpy(new_target, read_copy, reg->align);
             continue;
         }
-        void* write_copy = word_struct.first + (word_struct.second->read_version ? 0 : reg->align);
-        if (likely(word_struct.second->access.load() == tran->t_id)) {
+        void* write_copy = word + (*read_version ? 0 : reg->align);
+        if (likely(access->load() == tran->t_id)) {
             memcpy(new_target, write_copy, reg->align);
             continue;
-        } else if (likely(word_struct.second->access.load() == -1)) {
+        } else if (likely(access->load() == 0)) {
             memcpy(new_target, read_copy, reg->align);
             continue;
         } else {
-            tran->failed = true;
-            if (unlikely(tran->first_allocs.size()!=0)) {
-                unique_lock<shared_mutex> lock_m{reg->lock_mem};
-                for (auto const& word: tran->allocated) {
-                    delete reg->memory.at(word).second;
-                    reg->memory.erase(word);
-                }
-                for (auto const& word: tran->first_allocs)
-                    reg->memory_sizes.erase(word);
-                lock_m.unlock();
-            }
+            clear_writes(reg, &tran->writes);
             delete tran;
             // std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
             reg->batcher->leave(true);
@@ -255,36 +242,23 @@ bool tm_write(shared_t shared, tx_t tx, void const* source, size_t size, void* t
     Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
     for (size_t i = 0; i < size; i+=reg->align) {
-        void* word = target + i;
+        void* user_word = target + i;
         void* new_source = const_cast<void*>(source) + i;
-        shared_lock<shared_mutex> lock_m_shared{reg->lock_mem};
-        pair<void*, WordControl*> word_struct = reg->memory.at(word);
-        lock_m_shared.unlock();
-        void* write_copy = word_struct.first + (word_struct.second->read_version ? 0 : reg->align);
-        int expected = -1;
-        if (likely(word_struct.second->access.compare_exchange_weak(expected, tran->t_id))) {
+        void* word = get_word(reg, user_word);
+        atomic_uint* access = (atomic_uint*) (word + 2*reg->align);
+        bool* read_version = (bool*)(word + 2*reg->align + sizeof(atomic_uint) + 1);
+        void* write_copy = word + (*read_version ? 0 : reg->align);
+        uint expected = 0;
+        if (likely(access->compare_exchange_weak(expected, tran->t_id))) {
             memcpy(write_copy, new_source, reg->align);
-            tran->writes.insert(word_struct.second);
-            //tran->writes.insert(word_struct);
-            //reg->written.add(word_struct.second);
-            //word_struct.second->commit_write.store(true);
+            tran->writes.push_back(word);
             continue;
         } else if (likely(expected == tran->t_id)) {
             memcpy(write_copy, new_source, reg->align);
             continue;
         } else {
             //removeT(tran, true);
-            tran->failed = true;
-            if (unlikely(tran->first_allocs.size()!=0)) {
-                unique_lock<shared_mutex> lock_m{reg->lock_mem};
-                for (auto const& word: tran->allocated) {
-                    delete reg->memory.at(word).second;
-                    reg->memory.erase(word);
-                }
-                for (auto const& word: tran->first_allocs)
-                    reg->memory_sizes.erase(word);
-                lock_m.unlock();
-            }
+            clear_writes(reg, &tran->writes);
             delete tran;
             // std::chrono::steady_clock::time_point begin_leave = std::chrono::steady_clock::now();
             reg->batcher->leave(true);
@@ -317,22 +291,13 @@ Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
     // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     Region* reg = (Region*) shared;
     Transaction* tran = reinterpret_cast<Transaction*>(tx);
-    void* new_seg = calloc(size*2/reg->align, reg->align);
-    if (unlikely(new_seg == nullptr)) {
-        //cout << "No memory for segment" << endl;
+    lock_guard<mutex> lock_all{reg->lock_alloc};
+    if (unlikely(reg->tot_size + size > MAX_SIZE)) {
         return Alloc::nomem;
     }
-    void* iter_word = new_seg;
-    tran->first_allocs.push_back(new_seg);
-    unique_lock<shared_mutex> lock_m{reg->lock_mem};
-    for (size_t i = 0; i < size; i+=reg->align) {
-        tran->allocated.push_back(new_seg+i);
-        reg->memory[new_seg+i] = make_pair(iter_word, new WordControl());
-        iter_word = iter_word + 2*reg->align;
-    }
-    reg->memory_sizes[new_seg] = size;
-    lock_m.unlock();
-    *target = new_seg;
+    *target = reg->next_segment;
+    reg->next_segment = reg->next_segment + size*sizeof(Word);
+    reg->tot_size+=size;
     // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     // int64_t dur = std::chrono::duration_cast<std::chrono::nanoseconds> (end - begin).count();
     // tot_alloc_dur+=dur;
@@ -346,11 +311,6 @@ Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
  * @param target Address of the first byte of the previously allocated segment to deallocate
  * @return Whether the whole transaction can continue
 **/
-bool tm_free(shared_t shared as (unused), tx_t tx, void* target) noexcept {
-    //Region* reg = (Region*) shared;
-    Transaction* tran = reinterpret_cast<Transaction*>(tx);
-    //FreeControl* new_free = new FreeControl(target);
-    tran->frees.push_back(target);
-    //reg->to_free.add(new_free);
+bool tm_free(shared_t shared as (unused), tx_t tx as (unused), void* target as (unused)) noexcept {
     return true;
 }
